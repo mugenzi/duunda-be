@@ -20,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install rsync
+      - name: Ensure rsync is available
         run: |
           sudo apt-get update
           sudo apt-get install -y rsync
@@ -33,10 +33,8 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh
           umask 077
-          # Write the private key from the secret (handles multi-line safely)
           printf '%s' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
           chmod 600 ~/.ssh/ec2_key
-          # Trust the EC2 host so ssh/rsync won't prompt
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
       - name: Ensure target directory exists
@@ -45,7 +43,7 @@ jobs:
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_PATH: ${{ secrets.EC2_PATH }}
         run: |
-          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "mkdir -p \"$EC2_PATH\""
+          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "mkdir -p '$EC2_PATH'"
 
       - name: Sync files to EC2
         env:
@@ -63,12 +61,13 @@ jobs:
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_PATH: ${{ secrets.EC2_PATH }}
         run: |
-          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" <<EOF
+          # Pass EC2_PATH as an env to the remote shell, then use a QUOTED heredoc to avoid premature expansion.
+          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "EC2_PATH='$EC2_PATH' bash -s" <<'REMOTE'
             set -euo pipefail
             cd "$EC2_PATH"
 
+            # Install production deps. If there's no lockfile, npm ci will fail and we fall back to install.
             if command -v npm >/dev/null 2>&1; then
-              # Install production dependencies (Node 16+ supports --omit=dev)
               npm ci --omit=dev || npm install --omit=dev
             else
               echo "npm not found on server. Please install Node.js." >&2
@@ -80,12 +79,17 @@ jobs:
               if [ -f ecosystem.config.js ]; then
                 pm2 startOrReload ecosystem.config.js --update-env
               else
-                APP_NAME="my-node-app"
-                ENTRY="dist/server.js"  # <-- change to your real entry file
-                pm2 describe "$APP_NAME" >/dev/null 2>&1 && pm2 restart "$APP_NAME" || pm2 start "$ENTRY" --name "$APP_NAME"
+                APP_NAME="my-node-app"         # <-- change if you prefer a different name
+                ENTRY="dist/server.js"         # <-- change to your real entry file
+                if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+                  pm2 restart "$APP_NAME"
+                else
+                  pm2 start "$ENTRY" --name "$APP_NAME"
+                fi
               fi
               pm2 save
             else
+              # Install PM2 and start
               sudo npm i -g pm2
               pm2 --version
               if [ -f ecosystem.config.js ]; then
@@ -95,4 +99,4 @@ jobs:
               fi
               pm2 save
             fi
-          EOF
+          REMOTE
