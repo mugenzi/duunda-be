@@ -1,0 +1,54 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare SSH (write key, trust host)
+        run: |
+          mkdir -p ~/.ssh
+          umask 077
+          cat > ~/.ssh/ec2_key << 'EOF'
+${{ secrets.EC2_SSH_KEY }}
+EOF
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync files to EC2
+        run: |
+          RSYNC_EXCLUDES="--exclude .git --exclude .github --exclude node_modules --exclude .env --exclude tests --exclude coverage"
+          rsync -avz --delete $RSYNC_EXCLUDES -e "ssh -i ~/.ssh/ec2_key" ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PATH }}/
+
+      - name: Install deps & restart (PM2)
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
+            cd ${{ secrets.EC2_PATH }}
+            if command -v npm >/dev/null 2>&1; then
+              npm ci --omit=dev || npm install --omit=dev
+            else
+              echo "npm not found, install Node.js on the server"; exit 1
+            fi
+            if command -v pm2 >/dev/null 2>&1; then
+              if [ -f ecosystem.config.js ]; then
+                pm2 startOrReload ecosystem.config.js --update-env
+              else
+                APP_NAME="my-node-app"
+                ENTRY="dist/server.js"   # <— change to your entry file
+                pm2 describe "$APP_NAME" >/dev/null 2>&1 && pm2 restart "$APP_NAME" || pm2 start "$ENTRY" --name "$APP_NAME"
+              fi
+              pm2 save
+            else
+              sudo npm i -g pm2
+              pm2 --version
+              [ -f ecosystem.config.js ] && pm2 start ecosystem.config.js --update-env || pm2 start dist/server.js --name my-node-app
+              pm2 save
+            fi
+          EOF
