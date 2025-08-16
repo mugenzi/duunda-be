@@ -4,7 +4,9 @@ import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pkg from "pg";
-const { Pool, Client } = pkg;
+import { getDBClient } from "../config/utils.js";
+import { authenticateToken } from "./music.js";
+const { Pool } = pkg;
 const router = express.Router();
 
 // Database connection
@@ -19,13 +21,7 @@ const pool = new Pool({
 // Register user
 router.post("/register", async (req, res) => {
   try {
-    const client = new Client({
-      user: process.env.DB_USER || "postgres",
-      host: process.env.DB_HOST || "localhost",
-      database: process.env.DB_NAME || "music_app",
-      password: process.env.DB_PASSWORD || "password",
-      port: process.env.DB_PORT || 5432,
-    });
+    const client = getDBClient();
     client.connect();
     const { username, email, password } = req.body;
 
@@ -70,7 +66,6 @@ router.post("/register", async (req, res) => {
     client.end();
   } catch (error) {
     console.error("Registration error:", error);
-    console.log("tejas", process.env.DB_USER, process.env.DB_HOST);
     res.status(500).json({ message: "Server error during registration" });
   }
 });
@@ -78,8 +73,10 @@ router.post("/register", async (req, res) => {
 // Login user
 router.post("/login", async (req, res) => {
   try {
+    const client = getDBClient();
+    client.connect();
     const { email, password } = req.body;
-
+    console.log("tejas --- ", email, password);
     // Validate input
     if (!email || !password) {
       return res
@@ -88,31 +85,39 @@ router.post("/login", async (req, res) => {
     }
 
     // Find user
-    const user = await pool.query(
+    const user = await client.query(
       "SELECT id, username, email, password_hash FROM users WHERE email = $1",
       [email]
     );
+    console.log("tejas --- ", user.rows);
 
     if (user.rows.length === 0) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res
+        .status(401)
+        .json({ message: "Email or password is incorrect" });
     }
 
     // Check password
+    console.log("tejas --- ", password, user.rows[0].password_hash);
     const validPassword = await bcrypt.compare(
       password,
       user.rows[0].password_hash
     );
+    console.log("tejas --- ", validPassword);
     if (!validPassword) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      client.end();
+      return res
+        .status(401)
+        .json({ message: "Email or password is incorrect" });
     }
-
+    console.log("tejas", validPassword);
     // Generate JWT token
     const token = jwt.sign(
       { userId: user.rows[0].id, username: user.rows[0].username },
       process.env.JWT_SECRET || "fallback_secret",
       { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
     );
-
+    client.end();
     res.json({
       message: "Login successful",
       user: {
@@ -123,14 +128,20 @@ router.post("/login", async (req, res) => {
       token,
     });
   } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({ message: "Server error during login" });
+    console.log("Login error:", JSON.stringify(error));
+    res.status(500).json({
+      message:
+        "Server Could not respond at this moment, Please try again later",
+      error: error,
+    });
   }
 });
 
 // Verify token endpoint
 router.get("/verify", async (req, res) => {
   try {
+    const client = getDBClient();
+    client.connect();
     const token = req.headers.authorization?.split(" ")[1];
 
     if (!token) {
@@ -143,7 +154,7 @@ router.get("/verify", async (req, res) => {
     );
 
     // Get user info
-    const user = await pool.query(
+    const user = await client.query(
       "SELECT id, username, email, created_at FROM users WHERE id = $1",
       [decoded.userId]
     );
@@ -151,7 +162,7 @@ router.get("/verify", async (req, res) => {
     if (user.rows.length === 0) {
       return res.status(401).json({ message: "User not found" });
     }
-
+    client.end();
     res.json({
       valid: true,
       user: user.rows[0],

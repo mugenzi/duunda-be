@@ -20,7 +20,7 @@ const pool = new Pool({
 });
 
 // Authentication middleware
-const authenticateToken = (req, res, next) => {
+export const authenticateToken = (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];
 
   if (!token) {
