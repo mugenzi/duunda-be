@@ -73,8 +73,8 @@ router.post("/register", async (req, res) => {
 // Login user
 router.post("/login", async (req, res) => {
   try {
-    // const client = getDBClient();
-    // client.connect();
+    const client = getDBClient();
+    client.connect();
     const { email, password } = req.body;
     console.log("tejas --- ", email, password);
     // Validate input
@@ -85,7 +85,7 @@ router.post("/login", async (req, res) => {
     }
 
     // Find user
-    const user = await pool.query(
+    const user = await client.query(
       "SELECT id, username, email, password_hash FROM users WHERE email = $1",
       [email]
     );
@@ -117,7 +117,7 @@ router.post("/login", async (req, res) => {
       process.env.JWT_SECRET || "fallback_secret",
       { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
     );
-    // client.end();
+    client.end();
     res.json({
       message: "Login successful",
       user: {
