@@ -55,7 +55,7 @@ jobs:
           RSYNC_EXCLUDES="--exclude .git --exclude .github --exclude node_modules --exclude .env --exclude tests --exclude coverage"
           rsync -avz --delete $RSYNC_EXCLUDES -e "ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key" ./ "$EC2_USER@$EC2_HOST:$EC2_PATH/"
 
-      - name: Install deps, prune, stamp version, and restart with PM2 (clean)
+      - name: Install deps, prune, stamp, and restart with PM2 (clean)
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
@@ -67,43 +67,50 @@ jobs:
             "EC2_PATH='$EC2_PATH' APP_NAME='$APP_NAME' GIT_SHA='$GIT_SHA' bash -s" <<'REMOTE'
             set -euo pipefail
 
-            # Sanity: Node & npm present on server
-            if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-              echo "Node.js/npm not found on server. Please install Node (e.g., v20) before deploying." >&2
-              exit 1
-            fi
+            # Require Node/npm
+            command -v node >/dev/null || { echo "Node.js not found"; exit 1; }
+            command -v npm  >/dev/null || { echo "npm not found"; exit 1; }
 
             cd "$EC2_PATH"
 
-            # 1) Full install to ensure code + packages match the push
+            # Fresh install every deploy
             if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
               npm ci
             else
               npm install
             fi
 
-            # (No build step needed for this app; start script runs index.js)
+            # No build script for this app, so skip
 
-            # 2) Prune to production to keep runtime thin
+            # Prune to production to keep runtime thin
             npm prune --production || true
 
-            # 3) Stamp deploy info for verification
+            # Stamp deploy info
             date -Iseconds > .deploy_time
             printf "%s\n" "${GIT_SHA}" > .deploy_commit
 
-            # 4) Ensure PM2 is installed
+            # Ensure PM2
             if ! command -v pm2 >/dev/null 2>&1; then
               sudo npm i -g pm2
             fi
 
-            # 5) Start clean from the correct folder/file every time
+            # Start clean from the correct folder/file
             pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
             pm2 start index.js --name "$APP_NAME" --cwd "$EC2_PATH" --update-env
             pm2 save
 
-            # 6) Show quick diagnostics in job logs
+            # Quick diagnostics
+            echo "----- WHOAMI / PWD -----"
+            whoami; pwd
+            echo "----- EC2_PATH CONTENTS -----"
+            ls -la | head -n 50
+            echo "----- DEPLOY MARKERS -----"
+            echo -n "commit: "; cat .deploy_commit || true
+            echo -n "time:   "; cat .deploy_time || true
             echo "----- PM2 STATUS -----"
             pm2 list
-            echo "----- LAST 50 LINES OF LOG -----"
+            echo "----- PM2 INFO (first 120 lines) -----"
+            pm2 info "$APP_NAME" | sed -n '1,120p' || true
+            echo "----- LAST 50 LOG LINES -----"
             pm2 logs "$APP_NAME" --lines 50 --nostream || true
           REMOTE
