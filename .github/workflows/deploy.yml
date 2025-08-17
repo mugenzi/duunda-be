@@ -55,98 +55,55 @@ jobs:
           RSYNC_EXCLUDES="--exclude .git --exclude .github --exclude node_modules --exclude .env --exclude tests --exclude coverage"
           rsync -avz --delete $RSYNC_EXCLUDES -e "ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key" ./ "$EC2_USER@$EC2_HOST:$EC2_PATH/"
 
-      - name: Install deps, build, prune, and (re)start with PM2
+      - name: Install deps, prune, stamp version, and restart with PM2 (clean)
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_PATH: ${{ secrets.EC2_PATH }}
-          APP_ENTRY_FROM_VARS: ${{ vars.APP_ENTRY }}   # optional override
+          APP_NAME: duunda-be
+          GIT_SHA: ${{ github.sha }}
         run: |
           ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" \
-            "EC2_PATH='$EC2_PATH' APP_NAME='duunda-be' APP_ENTRY='$APP_ENTRY_FROM_VARS' bash -s" <<'REMOTE'
+            "EC2_PATH='$EC2_PATH' APP_NAME='$APP_NAME' GIT_SHA='$GIT_SHA' bash -s" <<'REMOTE'
             set -euo pipefail
 
+            # Sanity: Node & npm present on server
             if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-              echo "Node.js/npm not found on server. Install Node (e.g. Node 20) before deploying." >&2
+              echo "Node.js/npm not found on server. Please install Node (e.g., v20) before deploying." >&2
               exit 1
             fi
 
             cd "$EC2_PATH"
 
-            # 1) FULL install for build
+            # 1) Full install to ensure code + packages match the push
             if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
               npm ci
             else
               npm install
             fi
 
-            # 2) Build if script exists
-            if [ -f package.json ]; then
-              if node -e "const p=require('./package.json'); process.exit(p.scripts&&p.scripts.build?0:1)"; then
-                npm run build
-              else
-                echo "No build script; skipping build."
-              fi
-            fi
+            # (No build step needed for this app; start script runs index.js)
 
-            # 3) Prune to production (keep runtime thin)
-            npm prune --production || npm ci --omit=dev || true
+            # 2) Prune to production to keep runtime thin
+            npm prune --production || true
 
-            # 4) Ensure PM2 present
+            # 3) Stamp deploy info for verification
+            date -Iseconds > .deploy_time
+            printf "%s\n" "${GIT_SHA}" > .deploy_commit
+
+            # 4) Ensure PM2 is installed
             if ! command -v pm2 >/dev/null 2>&1; then
               sudo npm i -g pm2
             fi
 
-            # 5) Prefer ecosystem.config.js if present
-            if [ -f ecosystem.config.js ]; then
-              # Make sure the ecosystem uses the same app name or you'll reload the wrong process
-              pm2 startOrReload ecosystem.config.js --update-env
-              pm2 save
-              exit 0
-            fi
-
-            # 6) Determine ENTRY if no ecosystem file
-            ENTRY="${APP_ENTRY:-}"
-
-            # Try package.json "main" if not provided
-            if [ -z "$ENTRY" ] && [ -f package.json ]; then
-              MAIN=$(node -e "try{console.log(require('./package.json').main||'')}catch(e){process.exit(0)}")
-              if [ -n "$MAIN" ] && [ -f "$MAIN" ]; then ENTRY="$MAIN"; fi
-            fi
-
-            # If still empty but we have a start script, use npm start via PM2
-            USE_NPM_START=0
-            if [ -z "$ENTRY" ] && [ -f package.json ]; then
-              if node -e "const p=require('./package.json'); process.exit(p.scripts&&p.scripts.start?0:1)"; then
-                USE_NPM_START=1
-              fi
-            fi
-
-            # Common fallback entries
-            if [ -z "$ENTRY" ]; then
-              for C in server.js app.js index.js build/server.js dist/server.js build/index.js dist/index.js; do
-                if [ -f "$C" ]; then ENTRY="$C"; break; fi
-              done
-            fi
-
-            # 7) Start / reload with PM2 (consistent name!)
-            if [ "$USE_NPM_START" -eq 1 ]; then
-              if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-                pm2 restart "$APP_NAME" --update-env
-              else
-                pm2 start npm --name "$APP_NAME" -- start
-              fi
-            else
-              if [ -z "$ENTRY" ]; then
-                echo "No entry file found. Set repo Variable APP_ENTRY (e.g., dist/index.js) or add ecosystem.config.js." >&2
-                exit 1
-              fi
-              if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-                pm2 restart "$APP_NAME" --update-env
-              else
-                pm2 start "$ENTRY" --name "$APP_NAME"
-              fi
-            fi
-
+            # 5) Start clean from the correct folder/file every time
+            pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
+            pm2 start index.js --name "$APP_NAME" --cwd "$EC2_PATH" --update-env
             pm2 save
+
+            # 6) Show quick diagnostics in job logs
+            echo "----- PM2 STATUS -----"
+            pm2 list
+            echo "----- LAST 50 LINES OF LOG -----"
+            pm2 logs "$APP_NAME" --lines 50 --nostream || true
           REMOTE
