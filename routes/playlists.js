@@ -130,7 +130,7 @@ router.post("/", authenticateToken, async (req, res) => {
 
     res.status(201).json({
       message: "Playlist created successfully",
-      playlist: newPlaylist.rows[0],
+      playlist: { ...newPlaylist.rows[0], songs: [] },
     });
   } catch (error) {
     console.error("Error creating playlist:", error);
