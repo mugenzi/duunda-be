@@ -70,7 +70,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// Login user
+// Login user basic auth
 router.post("/login", async (req, res) => {
   try {
     const client = getDBClient();
