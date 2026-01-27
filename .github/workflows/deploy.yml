@@ -1,0 +1,116 @@
+name: Deploy to EC2 (v1-release)
+
+on:
+  push:
+    branches: ["v1-release"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v1-release
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure rsync is available
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rsync
+
+      - name: Prepare SSH (write key, trust host)
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          umask 077
+          printf '%s' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Ensure target directory exists
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_PATH: ${{ secrets.EC2_PATH }}
+        run: |
+          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "mkdir -p '$EC2_PATH'"
+
+      - name: Sync files to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_PATH: ${{ secrets.EC2_PATH }}
+        run: |
+          set -euo pipefail
+          RSYNC_EXCLUDES="--exclude .git --exclude .github --exclude node_modules --exclude .env --exclude tests --exclude coverage"
+          rsync -avz --delete $RSYNC_EXCLUDES -e "ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key" ./ "$EC2_USER@$EC2_HOST:$EC2_PATH/"
+
+      - name: Install deps, prune, stamp, and restart with PM2 (clean)
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_PATH: ${{ secrets.EC2_PATH }}
+          APP_NAME: duunda-be
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          ssh -o StrictHostKeyChecking=yes -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" \
+            "EC2_PATH='$EC2_PATH' APP_NAME='$APP_NAME' GIT_SHA='$GIT_SHA' bash -s" <<'REMOTE'
+            set -euo pipefail
+
+            # Require Node/npm
+            command -v node >/dev/null || { echo "Node.js not found"; exit 1; }
+            command -v npm  >/dev/null || { echo "npm not found"; exit 1; }
+
+            cd "$EC2_PATH"
+
+            # Fresh install every deploy
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              npm ci
+            else
+              npm install
+            fi
+
+            # No build script for this app, so skip
+
+            # Prune to production to keep runtime thin
+            npm prune --production || true
+
+            # Stamp deploy info
+            date -Iseconds > .deploy_time
+            printf "%s\n" "${GIT_SHA}" > .deploy_commit
+
+            # Ensure PM2
+            if ! command -v pm2 >/dev/null 2>&1; then
+              sudo npm i -g pm2
+            fi
+
+            # Start clean from the correct folder/file
+            pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
+            pm2 start index.js --name "$APP_NAME" --cwd "$EC2_PATH" --update-env
+            pm2 save
+
+            # Quick diagnostics
+            echo "----- WHOAMI / PWD -----"
+            whoami; pwd
+            echo "----- EC2_PATH CONTENTS -----"
+            ls -la | head -n 50
+            echo "----- DEPLOY MARKERS -----"
+            echo -n "commit: "; cat .deploy_commit || true
+            echo -n "time:   "; cat .deploy_time || true
+            echo "----- PM2 STATUS -----"
+            pm2 list
+            echo "----- PM2 INFO (first 120 lines) -----"
+            pm2 info "$APP_NAME" | sed -n '1,120p' || true
+            echo "----- LAST 50 LOG LINES -----"
+            pm2 logs "$APP_NAME" --lines 50 --nostream || true
+          REMOTE
