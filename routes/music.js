@@ -114,6 +114,7 @@ router.get("/", async (req, res) => {
              concat('${process.env.COVER_BASEPATH}', s.cover_url) as coverUrl,
              (SELECT COUNT(*)::int FROM song_plays WHERE song_id = s.id) AS "playCount",
              (SELECT COUNT(*)::int FROM song_likes WHERE song_id = s.id) AS "likeCount",
+             (SELECT COUNT(*)::int FROM song_dislikes WHERE song_id = s.id) AS "dislikeCount",
              (SELECT COUNT(*)::int FROM song_comments WHERE song_id = s.id) AS "commentCount"
       FROM songs s
       WHERE 1=1

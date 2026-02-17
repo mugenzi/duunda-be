@@ -9,11 +9,11 @@ All routes use `:songId` as the song ID (integer). Authenticated endpoints requi
 ## Play count
 
 ### POST `/api/songs/:songId/play`
-Record a play for the song. Optional auth (if token present, `user_id` is stored).
+Record a play for the song. Optional auth (if token present, `user_id` is stored). Returns updated `playCount` so clients can update UI.
 
 **Response** `201`:
 ```json
-{ "songId": 123, "recorded": true }
+{ "songId": 123, "recorded": true, "playCount": 1548 }
 ```
 
 ### GET `/api/songs/:songId/plays/count`
@@ -58,6 +58,55 @@ Check if current user has liked the song. **Auth required.**
 **Response** `200`:
 ```json
 { "songId": 123, "userId": 456, "isLiked": true }
+```
+
+---
+
+## Dislikes (mutually exclusive with likes)
+
+### POST `/api/songs/:songId/dislike`
+Dislike a song (current user). **Auth required.** Removes like if present.
+
+**Response** `201`:
+```json
+{ "songId": 123, "userId": 456, "disliked": true, "likeCount": 844, "dislikeCount": 16 }
+```
+
+### DELETE `/api/songs/:songId/dislike`
+Remove dislike. **Auth required.**
+
+**Response** `200`:
+```json
+{ "songId": 123, "userId": 456, "disliked": false, "likeCount": 844, "dislikeCount": 15 }
+```
+
+### GET `/api/songs/:songId/dislikes/count`
+Get total dislike count.
+
+**Response** `200`:
+```json
+{ "songId": 123, "dislikeCount": 15000 }
+```
+
+---
+
+## Engagement status (combined)
+
+### GET `/api/songs/:songId/engagement/status`
+Get like/dislike/comment/play counts and current user's like/dislike status. **Auth optional** (if token present, `isLiked` and `isDisliked` are returned).
+
+**Response** `200`:
+```json
+{
+  "songId": 123,
+  "userId": 456,
+  "isLiked": true,
+  "isDisliked": false,
+  "likeCount": 708000,
+  "dislikeCount": 15000,
+  "commentCount": 23,
+  "playCount": 1200
+}
 ```
 
 ---
@@ -129,6 +178,7 @@ See `config/database-engagement.sql` for full DDL. Summary:
 
 - **song_plays** – `song_id`, `user_id` (nullable), `played_at`
 - **song_likes** – `song_id`, `user_id`, unique `(user_id, song_id)`
+- **song_dislikes** – `song_id`, `user_id`, unique `(user_id, song_id)` (mutually exclusive with likes in app logic)
 - **song_comments** – `song_id`, `user_id`, `comment_text`, `created_at`, `updated_at`
 
 Run the migration after the main schema and `database-migration.sql`:

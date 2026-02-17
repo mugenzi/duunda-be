@@ -24,7 +24,137 @@ async function ensureSongExists(client, songId) {
   return true;
 }
 
-// POST /api/songs/:songId/play - Record a play (optional auth)
+// POST /api/songs/:songId/dislike and DELETE /api/songs/:songId/dislike - MUST be first so "dislike" path is matched
+router
+  .route("/:songId/dislike")
+  .post(authenticateToken, async (req, res) => {
+    try {
+      const songId = parseInt(req.params.songId, 10);
+      if (isNaN(songId))
+        return res.status(400).json({ message: "Invalid song ID" });
+      const userId = req.user.userId;
+      const client = getDBClient();
+      await client.connect();
+      const exists = await ensureSongExists(client, songId);
+      if (!exists) {
+        await client.end();
+        return res.status(404).json({ message: "Song not found" });
+      }
+      await client.query("DELETE FROM song_likes WHERE song_id = $1 AND user_id = $2", [songId, userId]);
+      await client.query(
+        "INSERT INTO song_dislikes (song_id, user_id) VALUES ($1, $2) ON CONFLICT (user_id, song_id) DO NOTHING",
+        [songId, userId]
+      );
+      const [likeCountResult, dislikeCountResult] = await Promise.all([
+        client.query("SELECT COUNT(*)::int AS count FROM song_likes WHERE song_id = $1", [songId]),
+        client.query("SELECT COUNT(*)::int AS count FROM song_dislikes WHERE song_id = $1", [songId]),
+      ]);
+      await client.end();
+      return res.status(201).json({
+        songId,
+        userId,
+        disliked: true,
+        likeCount: likeCountResult.rows[0].count,
+        dislikeCount: dislikeCountResult.rows[0].count,
+      });
+    } catch (err) {
+      console.error("Error disliking song:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  })
+  .delete(authenticateToken, async (req, res) => {
+    try {
+      const songId = parseInt(req.params.songId, 10);
+      if (isNaN(songId))
+        return res.status(400).json({ message: "Invalid song ID" });
+      const userId = req.user.userId;
+      const client = getDBClient();
+      await client.connect();
+      await client.query("DELETE FROM song_dislikes WHERE song_id = $1 AND user_id = $2", [songId, userId]);
+      const [likeCountResult, dislikeCountResult] = await Promise.all([
+        client.query("SELECT COUNT(*)::int AS count FROM song_likes WHERE song_id = $1", [songId]),
+        client.query("SELECT COUNT(*)::int AS count FROM song_dislikes WHERE song_id = $1", [songId]),
+      ]);
+      await client.end();
+      return res.json({
+        songId,
+        userId,
+        disliked: false,
+        likeCount: likeCountResult.rows[0].count,
+        dislikeCount: dislikeCountResult.rows[0].count,
+      });
+    } catch (err) {
+      console.error("Error removing dislike:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+// POST /api/songs/:songId/like and DELETE /api/songs/:songId/like - Register early so "like" path is matched
+router
+  .route("/:songId/like")
+  .post(authenticateToken, async (req, res) => {
+    try {
+      const songId = parseInt(req.params.songId, 10);
+      if (isNaN(songId))
+        return res.status(400).json({ message: "Invalid song ID" });
+      const userId = req.user.userId;
+      const client = getDBClient();
+      await client.connect();
+      const exists = await ensureSongExists(client, songId);
+      if (!exists) {
+        await client.end();
+        return res.status(404).json({ message: "Song not found" });
+      }
+      await client.query("DELETE FROM song_dislikes WHERE song_id = $1 AND user_id = $2", [songId, userId]);
+      await client.query(
+        "INSERT INTO song_likes (song_id, user_id) VALUES ($1, $2) ON CONFLICT (user_id, song_id) DO NOTHING",
+        [songId, userId]
+      );
+      const [likeCountResult, dislikeCountResult] = await Promise.all([
+        client.query("SELECT COUNT(*)::int AS count FROM song_likes WHERE song_id = $1", [songId]),
+        client.query("SELECT COUNT(*)::int AS count FROM song_dislikes WHERE song_id = $1", [songId]),
+      ]);
+      await client.end();
+      return res.status(201).json({
+        songId,
+        userId,
+        liked: true,
+        likeCount: likeCountResult.rows[0].count,
+        dislikeCount: dislikeCountResult.rows[0].count,
+      });
+    } catch (err) {
+      console.error("Error liking song:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  })
+  .delete(authenticateToken, async (req, res) => {
+    try {
+      const songId = parseInt(req.params.songId, 10);
+      if (isNaN(songId))
+        return res.status(400).json({ message: "Invalid song ID" });
+      const userId = req.user.userId;
+      const client = getDBClient();
+      await client.connect();
+      await client.query("DELETE FROM song_likes WHERE song_id = $1 AND user_id = $2", [songId, userId]);
+      const [likeCountResult, dislikeCountResult] = await Promise.all([
+        client.query("SELECT COUNT(*)::int AS count FROM song_likes WHERE song_id = $1", [songId]),
+        client.query("SELECT COUNT(*)::int AS count FROM song_dislikes WHERE song_id = $1", [songId]),
+      ]);
+      await client.end();
+      return res.json({
+        songId,
+        userId,
+        liked: false,
+        likeCount: likeCountResult.rows[0].count,
+        dislikeCount: dislikeCountResult.rows[0].count,
+      });
+    } catch (err) {
+      console.error("Error unliking song:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+// POST /api/songs/:songId/play - Record a play (optional auth), returns playCount
 router.post("/:songId/play", optionalAuth, async (req, res) => {
   try {
     const songId = parseInt(req.params.songId, 10);
@@ -42,10 +172,69 @@ router.post("/:songId/play", optionalAuth, async (req, res) => {
       "INSERT INTO song_plays (song_id, user_id, played_at) VALUES ($1, $2, NOW())",
       [songId, userId]
     );
+    const countResult = await client.query(
+      "SELECT COUNT(*)::int AS count FROM song_plays WHERE song_id = $1",
+      [songId]
+    );
     await client.end();
-    return res.status(201).json({ songId, recorded: true });
+    return res.status(201).json({
+      songId,
+      recorded: true,
+      playCount: countResult.rows[0].count,
+    });
   } catch (err) {
     console.error("Error recording play:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /api/songs/:songId/engagement/status - Combined like/dislike/comment/play (auth optional)
+router.get("/:songId/engagement/status", optionalAuth, async (req, res) => {
+  try {
+    const songId = parseInt(req.params.songId, 10);
+    if (isNaN(songId))
+      return res.status(400).json({ message: "Invalid song ID" });
+    const client = getDBClient();
+    await client.connect();
+    const exists = await ensureSongExists(client, songId);
+    if (!exists) {
+      await client.end();
+      return res.status(404).json({ message: "Song not found" });
+    }
+    const userId = req.user?.userId ?? null;
+    const [plays, likes, dislikes, comments] = await Promise.all([
+      client.query("SELECT COUNT(*)::int AS count FROM song_plays WHERE song_id = $1", [songId]),
+      client.query("SELECT COUNT(*)::int AS count FROM song_likes WHERE song_id = $1", [songId]),
+      client.query("SELECT COUNT(*)::int AS count FROM song_dislikes WHERE song_id = $1", [songId]),
+      client.query("SELECT COUNT(*)::int AS count FROM song_comments WHERE song_id = $1", [songId]),
+    ]);
+    let isLiked = false;
+    let isDisliked = false;
+    if (userId) {
+      const likeRow = await client.query(
+        "SELECT 1 FROM song_likes WHERE song_id = $1 AND user_id = $2",
+        [songId, userId]
+      );
+      const dislikeRow = await client.query(
+        "SELECT 1 FROM song_dislikes WHERE song_id = $1 AND user_id = $2",
+        [songId, userId]
+      );
+      isLiked = likeRow.rows.length > 0;
+      isDisliked = dislikeRow.rows.length > 0;
+    }
+    await client.end();
+    return res.json({
+      songId,
+      userId: userId ?? undefined,
+      isLiked,
+      isDisliked,
+      likeCount: likes.rows[0].count,
+      dislikeCount: dislikes.rows[0].count,
+      commentCount: comments.rows[0].count,
+      playCount: plays.rows[0].count,
+    });
+  } catch (err) {
+    console.error("Error fetching engagement status:", err);
     return res.status(500).json({ message: "Server error" });
   }
 });
@@ -78,13 +267,12 @@ router.get("/:songId/plays/count", async (req, res) => {
   }
 });
 
-// POST /api/songs/:songId/like - Like a song (auth required)
-router.post("/:songId/like", authenticateToken, async (req, res) => {
+// GET /api/songs/:songId/dislikes/count
+router.get("/:songId/dislikes/count", async (req, res) => {
   try {
     const songId = parseInt(req.params.songId, 10);
     if (isNaN(songId))
       return res.status(400).json({ message: "Invalid song ID" });
-    const userId = req.user.userId;
     const client = getDBClient();
     await client.connect();
     const exists = await ensureSongExists(client, songId);
@@ -92,53 +280,14 @@ router.post("/:songId/like", authenticateToken, async (req, res) => {
       await client.end();
       return res.status(404).json({ message: "Song not found" });
     }
-    await client.query(
-      "INSERT INTO song_likes (song_id, user_id) VALUES ($1, $2) ON CONFLICT (user_id, song_id) DO NOTHING",
-      [songId, userId]
-    );
-    const countResult = await client.query(
-      "SELECT COUNT(*)::int AS count FROM song_likes WHERE song_id = $1",
+    const r = await client.query(
+      "SELECT COUNT(*)::int AS count FROM song_dislikes WHERE song_id = $1",
       [songId]
     );
     await client.end();
-    return res.status(201).json({
-      songId,
-      userId,
-      liked: true,
-      likeCount: countResult.rows[0].count,
-    });
+    return res.json({ songId, dislikeCount: r.rows[0].count });
   } catch (err) {
-    console.error("Error liking song:", err);
-    return res.status(500).json({ message: "Server error" });
-  }
-});
-
-// DELETE /api/songs/:songId/like - Unlike (auth required)
-router.delete("/:songId/like", authenticateToken, async (req, res) => {
-  try {
-    const songId = parseInt(req.params.songId, 10);
-    if (isNaN(songId))
-      return res.status(400).json({ message: "Invalid song ID" });
-    const userId = req.user.userId;
-    const client = getDBClient();
-    await client.connect();
-    const result = await client.query(
-      "DELETE FROM song_likes WHERE song_id = $1 AND user_id = $2 RETURNING id",
-      [songId, userId]
-    );
-    const countResult = await client.query(
-      "SELECT COUNT(*)::int AS count FROM song_likes WHERE song_id = $1",
-      [songId]
-    );
-    await client.end();
-    return res.json({
-      songId,
-      userId,
-      liked: false,
-      likeCount: countResult.rows[0].count,
-    });
-  } catch (err) {
-    console.error("Error unliking song:", err);
+    console.error("Error fetching dislike count:", err);
     return res.status(500).json({ message: "Server error" });
   }
 });

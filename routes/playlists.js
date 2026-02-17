@@ -85,6 +85,7 @@ router.get("/:id", authenticateToken, async (req, res) => {
               CONCAT('${process.env.TRACK_BASEPATH}', s.audio_url) as audio_url,
               (SELECT COUNT(*)::int FROM song_plays WHERE song_id = s.id) AS "playCount",
               (SELECT COUNT(*)::int FROM song_likes WHERE song_id = s.id) AS "likeCount",
+              (SELECT COUNT(*)::int FROM song_dislikes WHERE song_id = s.id) AS "dislikeCount",
               (SELECT COUNT(*)::int FROM song_comments WHERE song_id = s.id) AS "commentCount"
        FROM songs s
        JOIN playlist_songs ps ON s.id = ps.song_id
