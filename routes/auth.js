@@ -50,15 +50,15 @@ router.post("/register", async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create user (username = email)
+    // Create user (username = email; role defaults to listener via DB)
     const newUser = await client.query(
-      "INSERT INTO users (username, email, password_hash, firstname, lastname, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, username, email, firstname, lastname, created_at",
+      "INSERT INTO users (username, email, password_hash, firstname, lastname, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id, username, email, firstname, lastname, role, created_at",
       [username, email, hashedPassword, firstname.trim(), lastname.trim()]
     );
 
-    // Generate JWT token
+    // Generate JWT token (include role)
     const token = jwt.sign(
-      { userId: newUser.rows[0].id, username: newUser.rows[0].username },
+      { userId: newUser.rows[0].id, username: newUser.rows[0].username, role: newUser.rows[0].role || "listener" },
       process.env.JWT_SECRET || "fallback_secret",
       { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
     );
@@ -89,9 +89,9 @@ router.post("/login", async (req, res) => {
         .json({ message: "Email and password are required" });
     }
 
-    // Find user
+    // Find user (include role)
     const user = await client.query(
-      "SELECT id, username, email, firstname, lastname, password_hash FROM users WHERE email = $1",
+      "SELECT id, username, email, firstname, lastname, password_hash, role FROM users WHERE email = $1",
       [email]
     );
     console.log("tejas --- ", user.rows);
@@ -116,9 +116,10 @@ router.post("/login", async (req, res) => {
         .json({ message: "Email or password is incorrect" });
     }
     console.log("tejas", validPassword);
-    // Generate JWT token
+    // Generate JWT token (include role)
+    const u = user.rows[0];
     const token = jwt.sign(
-      { userId: user.rows[0].id, username: user.rows[0].username },
+      { userId: u.id, username: u.username, role: u.role || "listener" },
       process.env.JWT_SECRET || "fallback_secret",
       { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
     );
@@ -126,11 +127,12 @@ router.post("/login", async (req, res) => {
     res.json({
       message: "Login successful",
       user: {
-        id: user.rows[0].id,
-        username: user.rows[0].username,
-        email: user.rows[0].email,
-        firstname: user.rows[0].firstname,
-        lastname: user.rows[0].lastname,
+        id: u.id,
+        username: u.username,
+        email: u.email,
+        firstname: u.firstname,
+        lastname: u.lastname,
+        role: u.role || "listener",
       },
       token,
     });

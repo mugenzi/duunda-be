@@ -16,6 +16,94 @@ const optionalAuth = (req, res, next) => {
   });
 };
 
+const requireArtistOrAdmin = (req, res, next) => {
+  const role = req.user?.role || "listener";
+  if (role !== "artist" && role !== "administrator") {
+    return res.status(403).json({ message: "Artist or administrator access required" });
+  }
+  next();
+};
+
+// GET /api/artists/me - Get logged-in artist profile (artist or admin only)
+router.get("/me", authenticateToken, requireArtistOrAdmin, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const client = getDBClient();
+    await client.connect();
+    let r = await client.query(
+      "SELECT id, name, avatar_url, bio, user_id, created_at FROM artists WHERE user_id = $1",
+      [userId]
+    );
+    if (r.rows.length === 0) {
+      const name = req.user.username || `User ${userId}`;
+      await client.query("INSERT INTO artists (name, user_id) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", [name, userId]);
+      r = await client.query(
+        "SELECT id, name, avatar_url, bio, user_id, created_at FROM artists WHERE user_id = $1",
+        [userId]
+      );
+      if (r.rows.length === 0) {
+        const byName = await client.query("SELECT id, name, avatar_url, bio, user_id, created_at FROM artists WHERE name = $1", [name]);
+        if (byName.rows.length > 0) {
+          await client.query("UPDATE artists SET user_id = $1 WHERE id = $2", [userId, byName.rows[0].id]);
+          r = byName;
+        }
+      }
+    }
+    await client.end();
+    if (r.rows.length === 0) return res.status(404).json({ message: "Artist profile not found" });
+    return res.json(r.rows[0]);
+  } catch (err) {
+    console.error("Error fetching artist me:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+// PATCH /api/artists/me - Update logged-in artist profile (name, bio, avatar_url)
+router.patch("/me", authenticateToken, requireArtistOrAdmin, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { name, bio, avatar_url } = req.body;
+    const client = getDBClient();
+    await client.connect();
+    let r = await client.query("SELECT id FROM artists WHERE user_id = $1", [userId]);
+    if (r.rows.length === 0) {
+      await client.end();
+      return res.status(404).json({ message: "Artist profile not found. Use GET /me first." });
+    }
+    const artistId = r.rows[0].id;
+    const updates = [];
+    const values = [];
+    let i = 1;
+    if (name !== undefined) {
+      updates.push(`name = $${i++}`);
+      values.push(name);
+    }
+    if (bio !== undefined) {
+      updates.push(`bio = $${i++}`);
+      values.push(bio);
+    }
+    if (avatar_url !== undefined) {
+      updates.push(`avatar_url = $${i++}`);
+      values.push(avatar_url);
+    }
+    if (updates.length === 0) {
+      await client.end();
+      return res.json({ message: "No updates" });
+    }
+    values.push(artistId);
+    await client.query(
+      `UPDATE artists SET ${updates.join(", ")}, updated_at = NOW() WHERE id = $${i}`,
+      values
+    );
+    r = await client.query("SELECT id, name, avatar_url, bio, user_id, updated_at FROM artists WHERE id = $1", [artistId]);
+    await client.end();
+    return res.json(r.rows[0]);
+  } catch (err) {
+    console.error("Error updating artist me:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
 // GET /api/artists?name=... - Get artist by name (for "About the artist")
 router.get("/", optionalAuth, async (req, res) => {
   try {

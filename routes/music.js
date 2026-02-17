@@ -40,6 +40,15 @@ export const authenticateToken = (req, res, next) => {
   );
 };
 
+// Require role artist or administrator (for upload, etc.)
+const requireArtistOrAdmin = (req, res, next) => {
+  const role = req.user?.role || "listener";
+  if (role !== "artist" && role !== "administrator") {
+    return res.status(403).json({ message: "Artist or administrator access required" });
+  }
+  next();
+};
+
 // Configure multer for file uploads (memory storage for database)
 const storage = multer.memoryStorage();
 
@@ -281,10 +290,11 @@ router.get("/:id/download", async (req, res) => {
   }
 });
 
-// Upload new song
+// Upload new song (artist or administrator only)
 router.post(
   "/upload",
   authenticateToken,
+  requireArtistOrAdmin,
   upload.fields([
     { name: "audio", maxCount: 1 },
     { name: "cover", maxCount: 1 },

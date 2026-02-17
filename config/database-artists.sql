@@ -27,5 +27,5 @@ CREATE TABLE IF NOT EXISTS artist_follows (
 CREATE INDEX IF NOT EXISTS idx_artist_follows_artist_id ON artist_follows(artist_id);
 
 -- Optional: link songs to artist (run after backfilling artists by name)
--- ALTER TABLE songs ADD COLUMN IF NOT EXISTS artist_id INTEGER REFERENCES artists(id) ON DELETE SET NULL;
--- CREATE INDEX IF NOT EXISTS idx_songs_artist_id ON songs(artist_id);
+ALTER TABLE songs ADD COLUMN IF NOT EXISTS artist_id INTEGER REFERENCES artists(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_songs_artist_id ON songs(artist_id);

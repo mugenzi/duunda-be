@@ -43,7 +43,7 @@ router.get("/profile", authenticateToken, async (req, res) => {
   try {
     client.connect();
     const user = await client.query(
-      "SELECT id, username, email, firstname, lastname, created_at FROM users WHERE id = $1",
+      "SELECT id, username, email, firstname, lastname, role, created_at FROM users WHERE id = $1",
       [req.user.userId]
     );
 
