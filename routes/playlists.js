@@ -78,9 +78,15 @@ router.get("/:id", authenticateToken, async (req, res) => {
       return res.status(404).json({ message: "Playlist not found" });
     }
 
-    // Get songs in playlist
+    // Get songs in playlist (with engagement counts)
     const songs = await client.query(
-      `SELECT s.*, ps.added_at, CONCAT('${process.env.COVER_BASEPATH}', s.cover_url) as cover_url, CONCAT('${process.env.TRACK_BASEPATH}', s.audio_url) as audio_url
+      `SELECT s.id, s.title, s.artist, s.album, s.genre, s.duration, s.cover_url, s.audio_url, ps.added_at,
+              CONCAT('${process.env.COVER_BASEPATH}', s.cover_url) as cover_url,
+              CONCAT('${process.env.TRACK_BASEPATH}', s.audio_url) as audio_url,
+              (SELECT COUNT(*)::int FROM song_plays WHERE song_id = s.id) AS "playCount",
+              (SELECT COUNT(*)::int FROM song_likes WHERE song_id = s.id) AS "likeCount",
+              (SELECT COUNT(*)::int FROM song_dislikes WHERE song_id = s.id) AS "dislikeCount",
+              (SELECT COUNT(*)::int FROM song_comments WHERE song_id = s.id) AS "commentCount"
        FROM songs s
        JOIN playlist_songs ps ON s.id = ps.song_id
        WHERE ps.playlist_id = $1

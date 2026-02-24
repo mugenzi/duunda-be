@@ -88,12 +88,16 @@ import authRoutes from "./routes/auth.js";
 import musicRoutes from "./routes/music.js";
 import playlistRoutes from "./routes/playlists.js";
 import userRoutes from "./routes/users.js";
+import engagementRoutes from "./routes/engagement.js";
+import artistRoutes from "./routes/artists.js";
 
 // Use routes
 app.use("/api/auth", authRoutes);
 app.use("/api/music", musicRoutes);
 app.use("/api/playlists", playlistRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/songs", engagementRoutes);
+app.use("/api/artists", artistRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

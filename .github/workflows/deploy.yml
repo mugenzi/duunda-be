@@ -2,7 +2,7 @@ name: Deploy to EC2 (v1-release)
 
 on:
   push:
-    branches: ["v1-release"]
+    branches: ["cursor-version"]
   workflow_dispatch:
 
 permissions:
