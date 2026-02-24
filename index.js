@@ -42,6 +42,8 @@ app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
 // Serve static files
 app.use(express.static("public"));
+// Serve uploaded avatars (e.g. /uploads/avatars/user_123.jpg)
+app.use("/uploads", express.static("uploads"));
 
 // Routes
 app.get("/api", (req, res) => {
