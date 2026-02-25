@@ -40,12 +40,33 @@ app.use(morgan("combined")); // Logging
 app.use(express.json({ limit: "10mb" })); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
-// Serve static files
-app.use(express.static("public"));
-// Serve uploaded avatars (e.g. /uploads/avatars/user_123.jpg)
-app.use("/uploads", express.static("uploads"));
+// Portal and HTML routes first (before static so "/" is login, not public/index.html)
+app.get("/", (req, res) => {
+  res.sendFile("login.html", { root: "public/portal" });
+});
+app.get("/signup", (req, res) => {
+  res.sendFile("signup.html", { root: "public/portal" });
+});
+app.get("/dashboard", (req, res) => {
+  res.sendFile("dashboard.html", { root: "public/portal" });
+});
+app.get("/dashboard/artist/:id", (req, res) => {
+  res.sendFile("dashboard.html", { root: "public/portal" });
+});
+app.get("/dashboard/upload", (req, res) => {
+  res.sendFile("upload.html", { root: "public/portal" });
+});
+app.get("/dashboard/artist/:id/upload", (req, res) => {
+  res.sendFile("upload.html", { root: "public/portal" });
+});
+app.get("/upload", (req, res) => {
+  res.sendFile("index.html", { root: "public" });
+});
+app.get("/privacy-policy", (req, res) => {
+  res.sendFile("privacy-policy.html", { root: "public" });
+});
 
-// Routes
+// API info
 app.get("/api", (req, res) => {
   res.json({
     message: "Welcome to Duunda Music App API",
@@ -54,19 +75,9 @@ app.get("/api", (req, res) => {
   });
 });
 
-// Serve upload page
-app.get("/", (req, res) => {
-  res.sendFile("index.html", { root: "public" });
-});
-
-app.get("/upload", (req, res) => {
-  res.sendFile("index.html", { root: "public" });
-});
-
-// Privacy policy (required for Google Play when using CAMERA / photo permissions)
-app.get("/privacy-policy", (req, res) => {
-  res.sendFile("privacy-policy.html", { root: "public" });
-});
+// Serve static files (after explicit routes so / serves portal login)
+app.use(express.static("public"));
+app.use("/uploads", express.static("uploads"));
 
 // Health check endpoint
 app.get("/health", async (req, res) => {
@@ -97,9 +108,11 @@ import playlistRoutes from "./routes/playlists.js";
 import userRoutes from "./routes/users.js";
 import engagementRoutes from "./routes/engagement.js";
 import artistRoutes from "./routes/artists.js";
+import portalRoutes from "./routes/portal.js";
 
 // Use routes
 app.use("/api/auth", authRoutes);
+app.use("/api/portal", portalRoutes);
 app.use("/api/music", musicRoutes);
 app.use("/api/playlists", playlistRoutes);
 app.use("/api/users", userRoutes);

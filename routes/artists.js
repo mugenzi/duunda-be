@@ -31,21 +31,21 @@ router.get("/me", authenticateToken, requireArtistOrAdmin, async (req, res) => {
     const client = getDBClient();
     await client.connect();
     let r = await client.query(
-      "SELECT id, name, avatar_url, bio, user_id, created_at FROM artists WHERE user_id = $1",
+      "SELECT id, carrier_name, firstname, lastname, middle_name, avatar_url, bio, user_id, created_at FROM artists WHERE user_id = $1",
       [userId]
     );
     if (r.rows.length === 0) {
-      const name = req.user.username || `User ${userId}`;
-      await client.query("INSERT INTO artists (name, user_id) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", [name, userId]);
+      const carrierName = req.user.username || `User ${userId}`;
+      await client.query("INSERT INTO artists (carrier_name, user_id) VALUES ($1, $2)", [carrierName, userId]);
       r = await client.query(
-        "SELECT id, name, avatar_url, bio, user_id, created_at FROM artists WHERE user_id = $1",
+        "SELECT id, carrier_name, firstname, lastname, middle_name, avatar_url, bio, user_id, created_at FROM artists WHERE user_id = $1",
         [userId]
       );
       if (r.rows.length === 0) {
-        const byName = await client.query("SELECT id, name, avatar_url, bio, user_id, created_at FROM artists WHERE name = $1", [name]);
-        if (byName.rows.length > 0) {
-          await client.query("UPDATE artists SET user_id = $1 WHERE id = $2", [userId, byName.rows[0].id]);
-          r = byName;
+        const byCarrier = await client.query("SELECT id, carrier_name, firstname, lastname, middle_name, avatar_url, bio, user_id, created_at FROM artists WHERE carrier_name = $1", [carrierName]);
+        if (byCarrier.rows.length > 0) {
+          await client.query("UPDATE artists SET user_id = $1 WHERE id = $2", [userId, byCarrier.rows[0].id]);
+          r = byCarrier;
         }
       }
     }
@@ -58,11 +58,11 @@ router.get("/me", authenticateToken, requireArtistOrAdmin, async (req, res) => {
   }
 });
 
-// PATCH /api/artists/me - Update logged-in artist profile (name, bio, avatar_url)
+// PATCH /api/artists/me - Update logged-in artist profile (carrier_name, firstname, lastname, middle_name, bio, avatar_url)
 router.patch("/me", authenticateToken, requireArtistOrAdmin, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { name, bio, avatar_url } = req.body;
+    const { carrier_name, firstname, lastname, middle_name, bio, avatar_url } = req.body;
     const client = getDBClient();
     await client.connect();
     let r = await client.query("SELECT id FROM artists WHERE user_id = $1", [userId]);
@@ -74,9 +74,21 @@ router.patch("/me", authenticateToken, requireArtistOrAdmin, async (req, res) =>
     const updates = [];
     const values = [];
     let i = 1;
-    if (name !== undefined) {
-      updates.push(`name = $${i++}`);
-      values.push(name);
+    if (carrier_name !== undefined) {
+      updates.push(`carrier_name = $${i++}`);
+      values.push(carrier_name);
+    }
+    if (firstname !== undefined) {
+      updates.push(`firstname = $${i++}`);
+      values.push(firstname);
+    }
+    if (lastname !== undefined) {
+      updates.push(`lastname = $${i++}`);
+      values.push(lastname);
+    }
+    if (middle_name !== undefined) {
+      updates.push(`middle_name = $${i++}`);
+      values.push(middle_name);
     }
     if (bio !== undefined) {
       updates.push(`bio = $${i++}`);
@@ -95,7 +107,7 @@ router.patch("/me", authenticateToken, requireArtistOrAdmin, async (req, res) =>
       `UPDATE artists SET ${updates.join(", ")}, updated_at = NOW() WHERE id = $${i}`,
       values
     );
-    r = await client.query("SELECT id, name, avatar_url, bio, user_id, updated_at FROM artists WHERE id = $1", [artistId]);
+    r = await client.query("SELECT id, carrier_name, firstname, lastname, middle_name, avatar_url, bio, user_id, updated_at FROM artists WHERE id = $1", [artistId]);
     await client.end();
     return res.json(r.rows[0]);
   } catch (err) {
@@ -104,29 +116,22 @@ router.patch("/me", authenticateToken, requireArtistOrAdmin, async (req, res) =>
   }
 });
 
-// GET /api/artists?name=... - Get artist by name (for "About the artist")
+// GET /api/artists?name=... - Get artist by carrier_name (for "About the artist"; name= kept for API compat)
 router.get("/", optionalAuth, async (req, res) => {
   try {
-    const name = req.query.name?.trim();
+    const name = (req.query.name || req.query.carrier_name || "").trim();
     if (!name) {
-      return res.status(400).json({ message: "Query 'name' is required" });
+      return res.status(400).json({ message: "Query 'name' or 'carrier_name' is required" });
     }
     const client = getDBClient();
     await client.connect();
     const r = await client.query(
-      "SELECT id, name, avatar_url, bio, created_at FROM artists WHERE name = $1",
+      "SELECT id, carrier_name, firstname, lastname, middle_name, avatar_url, bio, created_at FROM artists WHERE carrier_name = $1",
       [name]
     );
     if (r.rows.length === 0) {
-      await client.query("INSERT INTO artists (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", [name]);
-      r = await client.query(
-        "SELECT id, name, avatar_url, bio, created_at FROM artists WHERE name = $1",
-        [name]
-      );
-      if (r.rows.length === 0) {
-        await client.end();
-        return res.json({ id: null, name, avatar_url: null, bio: null, followerCount: 0, isFollowed: false });
-      }
+      await client.end();
+      return res.json({ id: null, carrier_name: name, name: name, avatar_url: null, bio: null, followerCount: 0, isFollowed: false });
     }
     const artist = r.rows[0];
     const countResult = await client.query(
@@ -144,7 +149,11 @@ router.get("/", optionalAuth, async (req, res) => {
     await client.end();
     return res.json({
       id: artist.id,
-      name: artist.name,
+      carrier_name: artist.carrier_name,
+      name: artist.carrier_name,
+      firstname: artist.firstname,
+      lastname: artist.lastname,
+      middle_name: artist.middle_name,
       avatar_url: artist.avatar_url,
       bio: artist.bio,
       followerCount: countResult.rows[0].count,
@@ -164,7 +173,7 @@ router.get("/:id", async (req, res) => {
     const client = getDBClient();
     await client.connect();
     const r = await client.query(
-      "SELECT id, name, avatar_url, bio, created_at FROM artists WHERE id = $1",
+      "SELECT id, carrier_name, firstname, lastname, middle_name, avatar_url, bio, created_at FROM artists WHERE id = $1",
       [id]
     );
     if (r.rows.length === 0) {
@@ -179,6 +188,7 @@ router.get("/:id", async (req, res) => {
     await client.end();
     return res.json({
       ...artist,
+      name: artist.carrier_name,
       followerCount: countResult.rows[0].count,
     });
   } catch (err) {
