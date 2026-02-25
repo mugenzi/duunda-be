@@ -87,7 +87,7 @@ router.get("/profile", authenticateToken, async (req, res) => {
   try {
     await client.connect();
     const user = await client.query(
-      "SELECT id, username, email, firstname, lastname, role, date_of_birth, gender, profile_picture_url, created_at FROM users WHERE id = $1",
+      "SELECT id, username, email, firstname, lastname, role, date_of_birth, gender, profile_picture_url, created_at, updated_at FROM users WHERE id = $1",
       [req.user.userId]
     );
 
@@ -97,11 +97,13 @@ router.get("/profile", authenticateToken, async (req, res) => {
 
     const row = user.rows[0];
     const baseUrl = getBaseUrl(req);
+    const updatedAt = row.updated_at ? new Date(row.updated_at).getTime() : null;
     res.json({
       ...row,
       profile_picture_url: row.profile_picture_url
         ? baseUrl + row.profile_picture_url
         : null,
+      updated_at: updatedAt,
     });
   } catch (error) {
     console.error("Error fetching user profile:", error);
