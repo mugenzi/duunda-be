@@ -63,6 +63,11 @@ app.get("/upload", (req, res) => {
   res.sendFile("index.html", { root: "public" });
 });
 
+// Privacy policy (required for Google Play when using CAMERA / photo permissions)
+app.get("/privacy-policy", (req, res) => {
+  res.sendFile("privacy-policy.html", { root: "public" });
+});
+
 // Health check endpoint
 app.get("/health", async (req, res) => {
   try {
