@@ -59,9 +59,16 @@ const uploadAvatar = multer({
   storage: avatarStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = /image\/(jpeg|jpg|png|gif|webp)/.test(file.mimetype);
-    if (allowed) cb(null, true);
-    else cb(new Error("Only image files are allowed"));
+    const mimetype = (file.mimetype || "").toLowerCase();
+    const mimetypeOk = /image\/(jpeg|jpg|png|gif|webp|pjpeg|x-png)/.test(mimetype);
+    const name = (file.originalname || "").toLowerCase();
+    const extOk = /\.(jpe?g|png|gif|webp)$/.test(name);
+    const genericBinary = mimetype === "application/octet-stream" || mimetype === "";
+    if (mimetypeOk || extOk || genericBinary) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed"));
+    }
   },
 });
 
