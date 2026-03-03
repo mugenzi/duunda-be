@@ -87,7 +87,7 @@ router.get("/profile", authenticateToken, async (req, res) => {
   try {
     await client.connect();
     const user = await client.query(
-      "SELECT id, username, email, firstname, lastname, role, date_of_birth, gender, profile_picture_url, created_at, updated_at FROM users WHERE id = $1",
+      "SELECT id, username, email, firstname, lastname, role, date_of_birth, gender, profile_picture_url, profile_picture_data, created_at, updated_at FROM users WHERE id = $1",
       [req.user.userId]
     );
 
@@ -98,11 +98,18 @@ router.get("/profile", authenticateToken, async (req, res) => {
     const row = user.rows[0];
     const baseUrl = getBaseUrl(req);
     const updatedAt = row.updated_at ? new Date(row.updated_at).getTime() : null;
+    const profilePictureUrl = row.profile_picture_url
+      ? baseUrl + row.profile_picture_url
+      : null;
+    const profilePictureBase64 = row.profile_picture_data
+      ? row.profile_picture_data.toString("base64")
+      : null;
+
     res.json({
       ...row,
-      profile_picture_url: row.profile_picture_url
-        ? baseUrl + row.profile_picture_url
-        : null,
+      profile_picture_url: profilePictureUrl,
+      profile_picture_base64: profilePictureBase64,
+      profile_picture_data: undefined,
       updated_at: updatedAt,
     });
   } catch (error) {
@@ -206,7 +213,7 @@ router.post("/profile/change-password", authenticateToken, async (req, res) => {
   }
 });
 
-// Upload profile picture (camera or gallery); returns profile_picture_url and updates user
+// Upload profile picture (camera or gallery); returns profile_picture_url and updates user; stores image in DB for cross-device
 router.post(
   "/profile/avatar",
   authenticateToken,
@@ -219,17 +226,21 @@ router.post(
       }
 
       const relativePath = "/uploads/avatars/" + path.basename(req.file.path);
+      const fileBuffer = fs.readFileSync(req.file.path);
+
       await client.connect();
-      await client.query("UPDATE users SET profile_picture_url = $1, updated_at = NOW() WHERE id = $2", [
-        relativePath,
-        req.user.userId,
-      ]);
+      await client.query(
+        "UPDATE users SET profile_picture_url = $1, profile_picture_data = $2, updated_at = NOW() WHERE id = $3",
+        [relativePath, fileBuffer, req.user.userId]
+      );
 
       const baseUrl = getBaseUrl(req);
       const fullUrl = baseUrl + relativePath;
+      const profilePictureBase64 = fileBuffer.toString("base64");
       res.json({
         message: "Profile picture updated",
         profile_picture_url: fullUrl,
+        profile_picture_base64: profilePictureBase64,
       });
     } catch (error) {
       console.error("Error uploading avatar:", error);

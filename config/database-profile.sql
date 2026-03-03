@@ -5,6 +5,8 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS gender VARCHAR(20);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture_url VARCHAR(500);
+-- Store image bytes so profile picture is available on any device (no URL dependency)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture_data BYTEA;
 
 -- firstname, lastname already added in database-migration.sql
 -- Index for profile lookups if needed
