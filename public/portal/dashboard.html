@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Duunda – Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #1a1a2e;
+      min-height: 100vh;
+      color: #eee;
+      padding: 20px;
+    }
+    a { color: #ED9C22; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    h1 { font-size: 1.5rem; }
+    .role { color: #888; font-size: 0.9rem; }
+    .btn { display: inline-block; padding: 10px 16px; background: #ED9C22; color: #1a1a2e; border-radius: 8px; font-weight: 600; border: none; cursor: pointer; font-size: 0.95rem; }
+    .btn:hover { background: #f0ad4e; }
+    .btn.outline { background: transparent; color: #ED9C22; border: 1px solid #ED9C22; }
+    .card { background: rgba(255,255,255,0.06); border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 1.1rem; margin-bottom: 12px; }
+    input[type="text"], input[type="number"], select {
+      width: 100%; padding: 10px 12px; margin-bottom: 10px; border: 1px solid #444; border-radius: 8px;
+      background: rgba(255,255,255,0.08); color: #fff; font-size: 1rem;
+    }
+    label { display: block; margin-bottom: 4px; font-size: 0.9rem; color: #aaa; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #333; }
+    th { color: #888; font-weight: 600; font-size: 0.85rem; }
+    .err { color: #f88; margin-top: 8px; font-size: 0.9rem; }
+    .hidden { display: none !important; }
+    #artistList section { margin-bottom: 1rem; }
+    #artistList a { display: block; padding: 12px; background: rgba(255,255,255,0.06); border-radius: 8px; margin-bottom: 8px; }
+    #artistList a:hover { background: rgba(255,255,255,0.1); }
+    .search { margin-bottom: 16px; }
+    .search input { max-width: 100%; }
+    #songSearch { max-width: 320px; }
+    .progress { margin-top: 8px; font-size: 0.9rem; color: #aaa; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Duunda Dashboard</h1>
+      <p class="role" id="roleLabel">Loading…</p>
+    </div>
+    <a href="/" class="btn outline" id="logoutBtn">Sign out</a>
+  </header>
+
+  <div id="adminView" class="hidden">
+    <div class="card">
+      <h2>Artists</h2>
+      <div class="search">
+        <input type="text" id="artistSearch" placeholder="Search by name or email…" />
+      </div>
+      <div id="artistList"></div>
+    </div>
+  </div>
+
+  <div id="artistView" class="hidden">
+    <p id="backLink" class="hidden" style="margin-bottom:12px"><a href="/dashboard">← Back to artists</a></p>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+        <h2 style="margin-bottom:0;">Songs</h2>
+        <a href="#" id="addSongBtn" class="btn">Add new song</a>
+      </div>
+      <div class="search">
+        <input type="text" id="songSearch" placeholder="Search songs by title, artist, album or genre…" />
+      </div>
+      <div id="songsList"></div>
+    </div>
+  </div>
+
+  <script src="/portal/dashboard.js"></script>
+</body>
+</html>

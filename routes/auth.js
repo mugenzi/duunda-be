@@ -75,6 +75,76 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// Register artist (enrollment: firstname, lastname, middle_name, carrier_name, email, password)
+router.post("/register-artist", async (req, res) => {
+  const client = getDBClient();
+  try {
+    await client.connect();
+    const { firstname, lastname, middle_name, carrier_name, email, password } = req.body;
+    const username = (email || "").trim().toLowerCase();
+    const emailTrim = username;
+
+    if (!firstname || !lastname || !carrier_name || !emailTrim || !password) {
+      return res.status(400).json({
+        message: "First name, last name, carrier name, email and password are required",
+      });
+    }
+
+    const userExists = await client.query(
+      "SELECT id FROM users WHERE email = $1 OR username = $2",
+      [emailTrim, username]
+    );
+    if (userExists.rows.length > 0) {
+      return res.status(400).json({ message: "An account with this email already exists" });
+    }
+
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    await client.query("BEGIN");
+    const newUser = await client.query(
+      `INSERT INTO users (username, email, password_hash, firstname, lastname, role, created_at)
+       VALUES ($1, $2, $3, $4, $5, 'artist', NOW())
+       RETURNING id, username, email, firstname, lastname, role, created_at`,
+      [username, emailTrim, hashedPassword, firstname.trim(), lastname.trim()]
+    );
+    const userId = newUser.rows[0].id;
+
+    await client.query(
+      `INSERT INTO artists (firstname, lastname, middle_name, carrier_name, user_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [firstname.trim(), lastname.trim(), (middle_name || "").trim() || null, carrier_name.trim(), userId]
+    );
+    await client.query("COMMIT");
+
+    const token = jwt.sign(
+      {
+        userId: newUser.rows[0].id,
+        username: newUser.rows[0].username,
+        role: "artist",
+      },
+      process.env.JWT_SECRET || "fallback_secret",
+      { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+    );
+
+    res.status(201).json({
+      message: "Artist account created. You can sign in now.",
+      user: newUser.rows[0],
+      token,
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {}
+    console.error("Artist registration error:", error);
+    res.status(500).json({ message: error.message || "Server error during registration" });
+  } finally {
+    try {
+      await client.end();
+    } catch (e) {}
+  }
+});
+
 // Login user basic auth
 router.post("/login", async (req, res) => {
   try {

@@ -312,14 +312,29 @@ router.post(
       if (!req.files.audio) {
         return res.status(400).json({ message: "Audio file is required" });
       }
-      if (!req.files.cover) {
-        return res.status(400).json({ message: "Cover image is required" });
-      }
+      const hasCover = req.files.cover && req.files.cover[0];
       // console.log(req.files.audio[0].originalname);
       // return res.status(200).json({ message: "Files uploaded successfully" });
-      const { title, artist, album, genre, duration } = req.body;
+      const { title, artist, album, genre, duration, track_number, artist_id, album_id } = req.body;
 
-      if (!title || !artist) {
+      let artistDisplayName = (artist && String(artist).trim()) || null;
+      const songArtistId = artist_id ? parseInt(artist_id, 10) : null;
+      const songAlbumId = album_id ? parseInt(album_id, 10) : null; // null for single
+
+      if (songArtistId && !isNaN(songArtistId)) {
+        const artistRow = await client.query(
+          "SELECT firstname, lastname, carrier_name FROM artists WHERE id = $1",
+          [songArtistId]
+        );
+        if (artistRow.rows.length > 0) {
+          const a = artistRow.rows[0];
+          const fullName = [a.firstname, a.lastname].filter(Boolean).join(" ").trim();
+          artistDisplayName = fullName || a.carrier_name || artistDisplayName || "Artist";
+        }
+      }
+      if (!artistDisplayName) artistDisplayName = artist || "Artist";
+
+      if (!title || !artistDisplayName) {
         return res
           .status(400)
           .json({ message: "Title and artist are required" });
@@ -358,42 +373,38 @@ router.post(
       //     uploaded_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
       //     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       // );
-      const newCover = await client.query(
-        `INSERT INTO cover_images (image_data, file_name, file_size, mime_type, uploaded_by, created_at) 
-        VALUES ($1, $2, $3, $4, $5, NOW()) 
-        RETURNING id, file_name, file_size, mime_type, uploaded_by, created_at`,
-        [
-          req.files.cover[0].buffer, // Binary data
-          req.files.cover[0].originalname, // Original filename
-          req.files.cover[0].size, // File size in bytes
-          req.files.cover[0].mimetype, // MIME type
-          req.user.userId,
-        ]
-      );
-      //   id SERIAL PRIMARY KEY,
-      // title VARCHAR(255) NOT NULL,
-      // artist VARCHAR(255) NOT NULL,
-      // album VARCHAR(255),
-      // genre VARCHAR(100),
-      // duration INTEGER, -- duration in seconds
-      // audio_url VARCHAR(500) NOT NULL, -- URL to access audio file
-      // cover_url VARCHAR(500), -- URL to access cover image
-      // uploaded_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      // created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      // updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      let coverId = null;
+      if (hasCover) {
+        const newCover = await client.query(
+          `INSERT INTO cover_images (image_data, file_name, file_size, mime_type, uploaded_by, created_at) 
+          VALUES ($1, $2, $3, $4, $5, NOW()) 
+          RETURNING id`,
+          [
+            req.files.cover[0].buffer,
+            req.files.cover[0].originalname,
+            req.files.cover[0].size,
+            req.files.cover[0].mimetype,
+            req.user.userId,
+          ]
+        );
+        coverId = newCover.rows[0].id;
+      }
       const newSong = await client.query(
-        `INSERT INTO songs (title, artist, album, genre, duration, audio_url, cover_url, uploaded_by, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-       RETURNING id, title, artist, album, genre, duration, audio_url, cover_url, uploaded_by, created_at`,
+        `INSERT INTO songs (title, artist, album, genre, duration, audio_url, cover_url, uploaded_by, created_at, track_number, artist_id, album_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10, $11)
+       RETURNING id, title, artist, album, genre, duration, audio_url, cover_url, uploaded_by, created_at, track_number, artist_id, album_id`,
         [
           title,
-          artist,
+          artistDisplayName,
           album || null,
           genre || null,
           duration || null,
           newAudio.rows[0].id,
-          newCover.rows[0].id,
+          coverId,
           req.user.userId,
+          track_number ? parseInt(track_number, 10) : null,
+          isNaN(songArtistId) ? null : songArtistId,
+          isNaN(songAlbumId) ? null : songAlbumId,
         ]
       );
       await client.end();
