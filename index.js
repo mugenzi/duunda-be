@@ -109,6 +109,7 @@ import userRoutes from "./routes/users.js";
 import engagementRoutes from "./routes/engagement.js";
 import artistRoutes from "./routes/artists.js";
 import portalRoutes from "./routes/portal.js";
+import testRoutes from "./routes/test.js";
 
 // Use routes
 app.use("/api/auth", authRoutes);
@@ -118,6 +119,7 @@ app.use("/api/playlists", playlistRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/songs", engagementRoutes);
 app.use("/api/artists", artistRoutes);
+app.use("/api/test", testRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
