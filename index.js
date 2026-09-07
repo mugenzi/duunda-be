@@ -5,6 +5,8 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import dotenv from "dotenv";
+import http from "http";
+import { WebSocketServer } from "ws";
 import pkg from "pg";
 const { Pool } = pkg;
 
@@ -88,12 +90,18 @@ import authRoutes from "./routes/auth.js";
 import musicRoutes from "./routes/music.js";
 import playlistRoutes from "./routes/playlists.js";
 import userRoutes from "./routes/users.js";
+import broadcastRoutes, {
+  ensureBroadcastTables,
+  handleBroadcastSocket,
+} from "./routes/broadcasts.js";
+import { getDBClient } from "./config/utils.js";
 
 // Use routes
 app.use("/api/auth", authRoutes);
 app.use("/api/music", musicRoutes);
 app.use("/api/playlists", playlistRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/broadcasts", broadcastRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -115,11 +123,47 @@ app.use("*", (req, res) => {
   });
 });
 
+const server = http.createServer(app);
+const broadcastWss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (request, socket, head) => {
+  const pathname = request.url?.split("?")[0] || "";
+  if (!pathname.startsWith("/ws/broadcasts/")) {
+    socket.destroy();
+    return;
+  }
+  broadcastWss.handleUpgrade(request, socket, head, (ws) => {
+    handleBroadcastSocket(ws, request.url).catch((error) => {
+      console.error("Broadcast socket error:", error);
+      try {
+        ws.close(1011, "Server error");
+      } catch {
+        /* ignore */
+      }
+    });
+  });
+});
+
+const migrateClient = getDBClient();
+migrateClient
+  .connect()
+  .then(() => ensureBroadcastTables(migrateClient))
+  .then(() => {
+    console.log("Broadcast tables are ready");
+  })
+  .catch((error) => {
+    console.error("Failed to ensure broadcast tables:", error.message);
+  })
+  .finally(() => {
+    migrateClient.end().catch(() => {});
+  });
+
 // Start server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🎵 Duunda Music App server is running on port ${PORT}`);
   console.log(`🌐 API available at http://localhost:${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`📻 Broadcasts API: http://localhost:${PORT}/api/broadcasts`);
 });
 
 // Graceful shutdown
