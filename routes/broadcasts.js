@@ -23,6 +23,7 @@ import {
   writeMixerPcm,
 } from "../services/broadcastMixer.js";
 import { resolveListenUrl } from "../services/broadcastListenUrl.js";
+import { sendAudioFile } from "../services/sendAudioFile.js";
 
 const router = express.Router();
 
@@ -90,6 +91,7 @@ function mapBroadcast(row, extras = {}) {
     listenUrl: resolveListenUrl({
       icecastConfigured: isMixerConfigured(),
       mountListenUrl: row.listen_url,
+      broadcastId: row.id,
       trackId: currentTrackId,
       audioUrl: mediaUrl(row.current_track_audio, "TRACK_BASEPATH"),
     }),
@@ -469,6 +471,7 @@ async function updateLiveBroadcast(req) {
       const nextListenUrl = resolveListenUrl({
         icecastConfigured: isMixerConfigured(),
         mountListenUrl: broadcast.listen_url || publicListenUrl(broadcast.mount_path),
+        broadcastId,
         trackId: nextTrackId,
         audioUrl,
       });
@@ -561,6 +564,51 @@ router.patch("/:id", authenticateToken, async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 });
+
+function audioFileId(row) {
+  const raw = row?.current_track_audio;
+  const fromSong = Number(raw);
+  if (Number.isFinite(fromSong) && fromSong > 0) return fromSong;
+  const fromTrack = Number(row?.current_track_id);
+  return Number.isFinite(fromTrack) && fromTrack > 0 ? fromTrack : null;
+}
+
+async function streamBroadcastListen(req, res) {
+  try {
+    const broadcastId = Number(req.params.id);
+    const row = await withClient((client) => fetchBroadcast(client, broadcastId));
+    if (!row || row.status !== "live") {
+      return res.status(410).json({ message: "Broadcast is not live" });
+    }
+    const fileId = audioFileId(row);
+    if (!fileId) {
+      return res.status(404).json({ message: "No track playing" });
+    }
+    const file = await withClient(async (client) => {
+      const result = await client.query(
+        `SELECT file_data, mime_type FROM audio_files WHERE id = $1`,
+        [fileId]
+      );
+      return result.rows[0] || null;
+    });
+    if (!file?.file_data) {
+      return res.status(404).json({ message: "Track audio not found" });
+    }
+    const buffer = Buffer.isBuffer(file.file_data)
+      ? file.file_data
+      : Buffer.from(file.file_data);
+    const mime = String(file.mime_type || "").startsWith("audio/")
+      ? file.mime_type
+      : "audio/mpeg";
+    return sendAudioFile(req, res, buffer, mime);
+  } catch (error) {
+    console.error("Error streaming broadcast audio:", error);
+    return res.status(500).json({ message: "Server error" });
+  }
+}
+
+router.get("/:id/listen.mp3", streamBroadcastListen);
+router.head("/:id/listen.mp3", streamBroadcastListen);
 
 router.get("/:id", authenticateToken, async (req, res) => {
   try {
