@@ -69,14 +69,21 @@ jobs:
 
             command -v node >/dev/null || { echo "Node.js not found"; exit 1; }
             command -v npm  >/dev/null || { echo "npm not found"; exit 1; }
+            # Amazon Linux has dnf/yum, not apt-get. App also ships ffmpeg-static.
             if ! command -v ffmpeg >/dev/null 2>&1; then
-              sudo apt-get update -y || true
-              sudo apt-get install -y ffmpeg || echo "ffmpeg install skipped; catalog-file listen fallback will be used"
+              if command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y ffmpeg || true
+              elif command -v yum >/dev/null 2>&1; then
+                sudo yum install -y ffmpeg || true
+              elif command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update -y || true
+                sudo apt-get install -y ffmpeg || true
+              fi
             fi
             if command -v ffmpeg >/dev/null 2>&1; then
               ffmpeg -version 2>/dev/null | awk 'NR==1 {print; exit}'
             else
-              echo "ffmpeg is not on PATH"
+              echo "system ffmpeg is not on PATH; Node will use ffmpeg-static"
             fi
 
             cd "$EC2_PATH"
