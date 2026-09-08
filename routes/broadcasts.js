@@ -23,14 +23,20 @@ import {
 } from "../services/broadcastMixer.js";
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
+
+function jwtSecret() {
+  // Read at request time. ESM imports run before index.js can dotenv.config(),
+  // so a module-level process.env.JWT_SECRET snapshot is "fallback_secret"
+  // and rejects real login tokens.
+  return process.env.JWT_SECRET || "fallback_secret";
+}
 
 const authenticateToken = (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) {
     return res.status(401).json({ message: "Access token required" });
   }
-  jwt.verify(token, JWT_SECRET, (err, user) => {
+  jwt.verify(token, jwtSecret(), (err, user) => {
     if (err) {
       return res.status(403).json({ message: "Invalid token" });
     }
@@ -500,7 +506,7 @@ router.get("/:id", authenticateToken, async (req, res) => {
 export function verifyBroadcastToken(token) {
   if (!token) return null;
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, jwtSecret());
   } catch {
     return null;
   }
