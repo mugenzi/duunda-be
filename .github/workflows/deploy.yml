@@ -70,10 +70,14 @@ jobs:
             command -v node >/dev/null || { echo "Node.js not found"; exit 1; }
             command -v npm  >/dev/null || { echo "npm not found"; exit 1; }
             if ! command -v ffmpeg >/dev/null 2>&1; then
-              sudo apt-get update
-              sudo apt-get install -y ffmpeg
+              sudo apt-get update -y || true
+              sudo apt-get install -y ffmpeg || echo "ffmpeg install skipped; catalog-file listen fallback will be used"
             fi
-            ffmpeg -version | head -n 1
+            if command -v ffmpeg >/dev/null 2>&1; then
+              ffmpeg -version 2>/dev/null | awk 'NR==1 {print; exit}'
+            else
+              echo "ffmpeg is not on PATH"
+            fi
 
             cd "$EC2_PATH"
 
