@@ -1,6 +1,7 @@
 /** @format */
 
 import { spawn, execFileSync } from "child_process";
+import ffmpegStatic from "ffmpeg-static";
 import { toPublicHttpsUrl } from "./broadcastListenUrl.js";
 
 const mixers = new Map();
@@ -11,16 +12,19 @@ const SILENCE_FRAME = Buffer.alloc(SILENCE_BYTES);
 let ffmpegOk;
 
 export function ffmpegBinary() {
-  return process.env.FFMPEG_PATH || "ffmpeg";
+  return process.env.FFMPEG_PATH || ffmpegStatic || "ffmpeg";
 }
 
 export function hasFfmpeg() {
   if (ffmpegOk !== undefined) return ffmpegOk;
+  const bin = ffmpegBinary();
   try {
-    execFileSync(ffmpegBinary(), ["-version"], { stdio: "ignore", timeout: 4000 });
+    execFileSync(bin, ["-version"], { stdio: "ignore", timeout: 4000 });
     ffmpegOk = true;
+    console.log(`[broadcast mixer] using ffmpeg at ${bin}`);
   } catch {
     ffmpegOk = false;
+    console.error(`[broadcast mixer] ffmpeg not runnable at ${bin}`);
   }
   return ffmpegOk;
 }
@@ -263,6 +267,8 @@ export function hasLiveMixer(broadcastId) {
   const entry = mixers.get(Number(broadcastId));
   return Boolean(entry?.proc && !entry.proc.killed);
 }
+
+hasFfmpeg();
 
 export function attachLiveMp3Listener(broadcastId, req, res) {
   const id = Number(broadcastId);
