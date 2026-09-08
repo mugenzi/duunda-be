@@ -21,6 +21,9 @@ import {
   startMixer,
   stopMixer,
   writeMixerPcm,
+  attachLiveMp3Listener,
+  hasFfmpeg,
+  ensureMixer,
 } from "../services/broadcastMixer.js";
 import { resolveListenUrl } from "../services/broadcastListenUrl.js";
 import { sendAudioFile } from "../services/sendAudioFile.js";
@@ -580,6 +583,18 @@ async function streamBroadcastListen(req, res) {
     if (!row || row.status !== "live") {
       return res.status(410).json({ message: "Broadcast is not live" });
     }
+
+    const audioUrl = mediaUrl(row.current_track_audio, "TRACK_BASEPATH");
+    if (hasFfmpeg()) {
+      ensureMixer(broadcastId, {
+        mountPath: row.mount_path,
+        audioUrl,
+      });
+      if (attachLiveMp3Listener(broadcastId, req, res)) {
+        return;
+      }
+    }
+
     const fileId = audioFileId(row);
     if (!fileId) {
       return res.status(404).json({ message: "No track playing" });
@@ -675,6 +690,9 @@ export async function handleBroadcastSocket(ws, requestUrl) {
           const micOn = Boolean(message.enabled);
           setMixerMic(broadcastId, micOn);
           setMicOn(broadcastId, micOn);
+        }
+        if (message?.type === "pcm" && typeof message.data === "string") {
+          writeMixerPcm(broadcastId, Buffer.from(message.data, "base64"));
         }
       } catch {
         /* ignore non-json */
