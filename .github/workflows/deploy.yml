@@ -67,9 +67,13 @@ jobs:
             "EC2_PATH='$EC2_PATH' APP_NAME='$APP_NAME' GIT_SHA='$GIT_SHA' bash -s" <<'REMOTE'
             set -euo pipefail
 
-            # Require Node/npm
             command -v node >/dev/null || { echo "Node.js not found"; exit 1; }
             command -v npm  >/dev/null || { echo "npm not found"; exit 1; }
+            if ! command -v ffmpeg >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y ffmpeg
+            fi
+            ffmpeg -version | head -n 1
 
             cd "$EC2_PATH"
 
