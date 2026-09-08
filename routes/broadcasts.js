@@ -15,12 +15,14 @@ import {
   setMicOn,
 } from "../services/broadcastHub.js";
 import {
+  isMixerConfigured,
   setMixerMic,
   setMixerTrack,
   startMixer,
   stopMixer,
   writeMixerPcm,
 } from "../services/broadcastMixer.js";
+import { resolveListenUrl } from "../services/broadcastListenUrl.js";
 
 const router = express.Router();
 
@@ -85,7 +87,12 @@ function mapBroadcast(row, extras = {}) {
     startedAt: row.started_at,
     endedAt: row.ended_at,
     mountPath: row.mount_path,
-    listenUrl: row.listen_url,
+    listenUrl: resolveListenUrl({
+      icecastConfigured: isMixerConfigured(),
+      mountListenUrl: row.listen_url,
+      trackId: currentTrackId,
+      audioUrl: mediaUrl(row.current_track_audio, "TRACK_BASEPATH"),
+    }),
     currentTrackId,
     currentTrack: currentTrackId
       ? {
@@ -199,7 +206,7 @@ router.post("/", authenticateToken, async (req, res) => {
       );
       const id = inserted.rows[0].id;
       const mountPath = `/live/${id}.mp3`;
-      const listenUrl = publicListenUrl(mountPath);
+      const listenUrl = isMixerConfigured() ? publicListenUrl(mountPath) : "";
       await client.query(
         `UPDATE broadcasts SET mount_path = $1, listen_url = $2 WHERE id = $3`,
         [mountPath, listenUrl, id]
@@ -431,19 +438,24 @@ router.post("/:id/end", authenticateToken, async (req, res) => {
   }
 });
 
-router.patch("/:id/track", authenticateToken, async (req, res) => {
-  try {
-    const broadcastId = Number(req.params.id);
-    const trackId = req.body?.trackId ?? req.body?.currentTrackId ?? null;
+async function updateLiveBroadcast(req) {
+  const broadcastId = Number(req.params.id);
+  const body = req.body || {};
+  const hasTrack = Object.prototype.hasOwnProperty.call(body, "trackId")
+    || Object.prototype.hasOwnProperty.call(body, "currentTrackId");
+  const hasMic = Object.prototype.hasOwnProperty.call(body, "micOn");
+  const trackId = body.trackId ?? body.currentTrackId ?? null;
 
-    const result = await withClient(async (client) => {
-      const broadcast = await fetchBroadcast(client, broadcastId);
-      if (!broadcast) return { missing: true };
-      if (broadcast.host_user_id !== req.user.userId) return { forbidden: true };
-      if (broadcast.status !== "live") return { ended: true, broadcast };
+  const result = await withClient(async (client) => {
+    const broadcast = await fetchBroadcast(client, broadcastId);
+    if (!broadcast) return { missing: true };
+    if (broadcast.host_user_id !== req.user.userId) return { forbidden: true };
+    if (broadcast.status !== "live") return { ended: true, broadcast };
 
+    let audioUrl;
+    if (hasTrack) {
       let nextTrackId = null;
-      let audioUrl = null;
+      audioUrl = null;
       if (trackId != null && trackId !== "") {
         const song = await client.query(
           `SELECT id, title, artist, cover_url, audio_url FROM songs WHERE id = $1`,
@@ -454,38 +466,98 @@ router.patch("/:id/track", authenticateToken, async (req, res) => {
         audioUrl = mediaUrl(song.rows[0].audio_url, "TRACK_BASEPATH");
       }
 
-      await client.query(`UPDATE broadcasts SET current_track_id = $1 WHERE id = $2`, [
-        nextTrackId,
-        broadcastId,
-      ]);
-      return {
-        broadcast: await fetchBroadcast(client, broadcastId),
+      const nextListenUrl = resolveListenUrl({
+        icecastConfigured: isMixerConfigured(),
+        mountListenUrl: broadcast.listen_url || publicListenUrl(broadcast.mount_path),
+        trackId: nextTrackId,
         audioUrl,
-      };
-    });
-
-    if (result.missing) {
-      return res.status(404).json({ message: "Broadcast not found" });
-    }
-    if (result.forbidden) {
-      return res.status(403).json({ message: "Only the host can change the track" });
-    }
-    if (result.ended) {
-      return res.status(409).json({ message: "Broadcast has ended" });
-    }
-    if (result.badTrack) {
-      return res.status(404).json({ message: "Track not found" });
+      });
+      await client.query(
+        `UPDATE broadcasts SET current_track_id = $1, listen_url = $2 WHERE id = $3`,
+        [nextTrackId, nextListenUrl || "", broadcastId]
+      );
     }
 
-    setMixerTrack(broadcastId, result.audioUrl);
-    const broadcast = mapBroadcast(result.broadcast);
+    return {
+      broadcast: await fetchBroadcast(client, broadcastId),
+      audioUrl,
+      hasTrack,
+      hasMic,
+    };
+  });
+
+  if (result.missing || result.forbidden || result.ended || result.badTrack) {
+    return result;
+  }
+
+  if (result.hasTrack) {
+    setMixerTrack(broadcastId, result.audioUrl || null);
+    const mapped = mapBroadcast(result.broadcast);
     broadcastEvent(broadcastId, {
       type: "track_changed",
-      currentTrack: broadcast.currentTrack,
+      currentTrack: mapped.currentTrack,
     });
-    return res.json({ message: "Track updated", broadcast });
+  }
+
+  if (result.hasMic) {
+    setMixerMic(broadcastId, body.micOn);
+    setMicOn(broadcastId, body.micOn);
+  }
+
+  return result;
+}
+
+function sendUpdateErrors(res, result) {
+  if (result.missing) {
+    return res.status(404).json({ message: "Broadcast not found" });
+  }
+  if (result.forbidden) {
+    return res.status(403).json({ message: "Only the host can update this broadcast" });
+  }
+  if (result.ended) {
+    return res.status(409).json({ message: "Broadcast has ended" });
+  }
+  if (result.badTrack) {
+    return res.status(404).json({ message: "Track not found" });
+  }
+  return null;
+}
+
+router.patch("/:id/track", authenticateToken, async (req, res) => {
+  try {
+    const result = await updateLiveBroadcast(req);
+    if (sendUpdateErrors(res, result)) return;
+    return res.json({
+      message: "Track updated",
+      broadcast: mapBroadcast(result.broadcast, {
+        micOn: req.body?.micOn !== undefined ? Boolean(req.body.micOn) : undefined,
+      }),
+    });
   } catch (error) {
     console.error("Error updating broadcast track:", error);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+router.patch("/:id", authenticateToken, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const hasTrack = Object.prototype.hasOwnProperty.call(body, "trackId")
+      || Object.prototype.hasOwnProperty.call(body, "currentTrackId");
+    const hasMic = Object.prototype.hasOwnProperty.call(body, "micOn");
+    if (!hasTrack && !hasMic) {
+      return res.status(400).json({ message: "Nothing to update" });
+    }
+    const result = await updateLiveBroadcast(req);
+    if (sendUpdateErrors(res, result)) return;
+    return res.json({
+      message: hasTrack ? "Track updated" : "Broadcast updated",
+      broadcast: mapBroadcast(result.broadcast, {
+        micOn: hasMic ? Boolean(body.micOn) : undefined,
+      }),
+    });
+  } catch (error) {
+    console.error("Error updating broadcast:", error);
     return res.status(500).json({ message: "Server error" });
   }
 });
