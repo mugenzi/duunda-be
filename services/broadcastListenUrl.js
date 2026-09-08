@@ -22,19 +22,30 @@ export function catalogTrackListenUrl(trackId, audioUrl) {
   return `${publicApiBase()}/api/music/tracks/${trackId}`;
 }
 
+export function broadcastListenPath(broadcastId, trackId) {
+  if (broadcastId == null || broadcastId === "" || trackId == null || trackId === "") {
+    return null;
+  }
+  return `${publicApiBase()}/api/broadcasts/${broadcastId}/listen.mp3?t=${trackId}`;
+}
+
 /**
  * Icecast mounts are the long-term listen URL. Until that box exists,
- * listeners play the current catalog track over the public HTTPS API
- * (same files the host already monitors locally).
+ * listeners play through /listen.mp3 so the player gets audio/mpeg,
+ * a .mp3 path, and HTTP Range — the catalog /tracks/:id route currently
+ * advertises image/jpeg + nosniff, which iOS AVPlayer rejects.
  */
 export function resolveListenUrl({
   icecastConfigured,
   mountListenUrl,
+  broadcastId,
   trackId,
   audioUrl,
 }) {
   if (icecastConfigured) {
     return mountListenUrl || null;
   }
-  return catalogTrackListenUrl(trackId, audioUrl);
+  return (
+    broadcastListenPath(broadcastId, trackId) || catalogTrackListenUrl(trackId, audioUrl)
+  );
 }

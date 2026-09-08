@@ -166,7 +166,7 @@ router.get("/tracks/:id", async (req, res) => {
     const client = getDBClient();
     await client.connect();
     const song = await client.query(
-      `SELECT file_data
+      `SELECT file_data, mime_type
        FROM audio_files 
        WHERE id = $1`,
       [id]
@@ -177,9 +177,12 @@ router.get("/tracks/:id", async (req, res) => {
     }
     await client.end();
     const audioBuffer = song.rows[0].file_data;
-    const mimeType = song.rows[0].mime_type || "image/jpeg";
+    const mimeType = String(song.rows[0].mime_type || "").startsWith("audio/")
+      ? song.rows[0].mime_type
+      : "audio/mpeg";
 
     res.setHeader("Content-Type", mimeType);
+    res.setHeader("Accept-Ranges", "bytes");
     res.send(audioBuffer);
   } catch (error) {
     console.error("Error fetching song:", error);
