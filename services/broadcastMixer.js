@@ -1,8 +1,10 @@
 /** @format */
 
 import { spawn, execFileSync } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import ffmpegStatic from "ffmpeg-static";
-import { toPublicHttpsUrl } from "./broadcastListenUrl.js";
 
 const mixers = new Map();
 const SAMPLE_RATE = 44100;
@@ -33,8 +35,71 @@ function icecastConfigured() {
   return Boolean(process.env.ICECAST_HOST && process.env.ICECAST_SOURCE_PASSWORD);
 }
 
-function trackInputUrl(audioUrl) {
-  return toPublicHttpsUrl(audioUrl) || audioUrl || null;
+export function mixerTrackPath(broadcastId) {
+  return path.join(os.tmpdir(), `duunda-broadcast-${Number(broadcastId)}.mp3`);
+}
+
+export function writeMixerTrackFile(broadcastId, buffer) {
+  const dest = mixerTrackPath(broadcastId);
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  fs.writeFileSync(dest, bytes);
+  return dest;
+}
+
+export function buildMixerArgs(entry) {
+  const args = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-fflags",
+    "+nobuffer",
+    "-flush_packets",
+    "1",
+  ];
+
+  if (entry?.trackPath && fs.existsSync(entry.trackPath)) {
+    args.push("-re", "-stream_loop", "-1", "-i", entry.trackPath);
+  } else {
+    args.push(
+      "-f",
+      "lavfi",
+      "-re",
+      "-i",
+      "anullsrc=channel_layout=stereo:sample_rate=44100"
+    );
+  }
+
+  // probesize must sit on the stdin input or ffmpeg blocks until megabytes of PCM arrive.
+  args.push(
+    "-f",
+    "s16le",
+    "-ar",
+    String(SAMPLE_RATE),
+    "-ac",
+    "1",
+    "-probesize",
+    "32",
+    "-analyzeduration",
+    "0",
+    "-thread_queue_size",
+    "512",
+    "-i",
+    "pipe:0",
+    "-filter_complex",
+    "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.85[t];[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.4[m];[t][m]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[a]",
+    "-map",
+    "[a]",
+    "-c:a",
+    "libmp3lame",
+    "-b:a",
+    "128k",
+    "-flush_packets",
+    "1",
+    "-f",
+    "mp3",
+    "pipe:1"
+  );
+  return args;
 }
 
 function stopProcess(entry) {
@@ -78,55 +143,7 @@ function spawnMixer(broadcastId, entry) {
     return null;
   }
 
-  const args = [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-fflags",
-    "+nobuffer",
-    "-flush_packets",
-    "1",
-  ];
-  const track = trackInputUrl(entry.audioUrl);
-  if (track) {
-    args.push(
-      "-reconnect",
-      "1",
-      "-reconnect_streamed",
-      "1",
-      "-reconnect_delay_max",
-      "2",
-      "-re",
-      "-i",
-      track
-    );
-  } else {
-    args.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
-  }
-
-  args.push(
-    "-f",
-    "s16le",
-    "-ar",
-    String(SAMPLE_RATE),
-    "-ac",
-    "1",
-    "-i",
-    "pipe:0",
-    "-filter_complex",
-    "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.85[t];[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.4[m];[t][m]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[a]",
-    "-map",
-    "[a]",
-    "-c:a",
-    "libmp3lame",
-    "-b:a",
-    "128k",
-    "-f",
-    "mp3",
-    "pipe:1"
-  );
-
-  const proc = spawn(ffmpegBinary(), args, {
+  const proc = spawn(ffmpegBinary(), buildMixerArgs(entry), {
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -150,11 +167,23 @@ function spawnMixer(broadcastId, entry) {
   return proc;
 }
 
+function feedMixerStdin(broadcastId, buffer, fromMic) {
+  const entry = mixers.get(broadcastId);
+  if (!entry?.proc?.stdin || entry.proc.stdin.destroyed) return;
+  if (fromMic) entry.lastPcmAt = Date.now();
+  try {
+    entry.proc.stdin.write(buffer);
+  } catch {
+    /* ignore backpressure / closed pipe */
+  }
+}
+
 function ensureSilencePump(broadcastId, entry) {
   if (entry.silenceTimer) return;
   entry.silenceTimer = setInterval(() => {
-    if (!entry.micOn) {
-      writeMixerPcm(broadcastId, SILENCE_FRAME);
+    const idleFor = Date.now() - (entry.lastPcmAt || 0);
+    if (idleFor >= 25) {
+      feedMixerStdin(broadcastId, SILENCE_FRAME, false);
     }
   }, 20);
 }
@@ -165,10 +194,12 @@ function ensureEntry(broadcastId, extras = {}) {
     entry = {
       mountPath: extras.mountPath || "",
       audioUrl: extras.audioUrl || null,
+      trackPath: extras.trackPath || null,
       micOn: false,
       proc: null,
       listeners: new Set(),
       silenceTimer: null,
+      lastPcmAt: 0,
     };
     mixers.set(broadcastId, entry);
   } else {
@@ -176,33 +207,40 @@ function ensureEntry(broadcastId, extras = {}) {
     if (Object.prototype.hasOwnProperty.call(extras, "audioUrl")) {
       entry.audioUrl = extras.audioUrl || null;
     }
+    if (Object.prototype.hasOwnProperty.call(extras, "trackPath")) {
+      entry.trackPath = extras.trackPath || null;
+    }
   }
   return entry;
 }
 
-export function startMixer(broadcastId, { mountPath, audioUrl = null } = {}) {
+function launchProcess(broadcastId, entry) {
+  if (!(hasFfmpeg() || icecastConfigured())) {
+    console.log(
+      `[broadcast mixer ${broadcastId}] ffmpeg not available; serving catalog file only`
+    );
+    return;
+  }
+  entry.proc = spawnMixer(broadcastId, entry);
+  ensureSilencePump(broadcastId, entry);
+  feedMixerStdin(broadcastId, SILENCE_FRAME, false);
+}
+
+export function startMixer(broadcastId, extras = {}) {
   const prev = mixers.get(broadcastId);
   const listeners = prev?.listeners || new Set();
   stopProcess(prev);
 
-  const entry = ensureEntry(broadcastId, { mountPath, audioUrl });
+  const entry = ensureEntry(broadcastId, extras);
   entry.listeners = listeners;
   entry.micOn = Boolean(prev?.micOn);
-
-  if (hasFfmpeg() || icecastConfigured()) {
-    entry.proc = spawnMixer(broadcastId, entry);
-    ensureSilencePump(broadcastId, entry);
-  } else {
-    console.log(
-      `[broadcast mixer ${broadcastId}] ffmpeg not available; serving catalog file only`
-    );
-  }
-
+  launchProcess(broadcastId, entry);
   mixers.set(broadcastId, entry);
 }
 
-export function setMixerTrack(broadcastId, audioUrl) {
-  const entry = ensureEntry(broadcastId, { audioUrl: audioUrl || null });
+export function setMixerTrack(broadcastId, extras = {}) {
+  const entry = ensureEntry(broadcastId, extras);
+  if (!entry.proc) return;
   const listeners = entry.listeners;
   const micOn = entry.micOn;
   const mountPath = entry.mountPath;
@@ -210,26 +248,19 @@ export function setMixerTrack(broadcastId, audioUrl) {
   entry.listeners = listeners;
   entry.micOn = micOn;
   entry.mountPath = mountPath;
-  entry.audioUrl = audioUrl || null;
-  if (hasFfmpeg() || icecastConfigured()) {
-    entry.proc = spawnMixer(broadcastId, entry);
-    ensureSilencePump(broadcastId, entry);
-  }
+  launchProcess(broadcastId, entry);
 }
 
 export function writeMixerPcm(broadcastId, buffer) {
-  const entry = mixers.get(broadcastId);
-  if (!entry?.proc?.stdin || entry.proc.stdin.destroyed) return;
-  try {
-    entry.proc.stdin.write(buffer);
-  } catch {
-    /* ignore backpressure / closed pipe */
-  }
+  feedMixerStdin(broadcastId, buffer, true);
 }
 
 export function setMixerMic(broadcastId, micOn) {
   const entry = ensureEntry(broadcastId);
   entry.micOn = Boolean(micOn);
+  if (!entry.micOn && entry.proc && !entry.listeners.size) {
+    stopProcess(entry);
+  }
 }
 
 export function stopMixer(broadcastId) {
@@ -245,6 +276,11 @@ export function stopMixer(broadcastId) {
     entry.listeners.clear();
   }
   stopProcess(entry);
+  try {
+    fs.unlinkSync(mixerTrackPath(broadcastId));
+  } catch {
+    /* ignore */
+  }
   mixers.delete(broadcastId);
 }
 
@@ -252,15 +288,16 @@ export function isMixerConfigured() {
   return icecastConfigured();
 }
 
-export function ensureMixer(broadcastId, { mountPath, audioUrl = null } = {}) {
+export function ensureMixer(broadcastId, extras = {}) {
   const entry = mixers.get(Number(broadcastId));
   if (entry?.proc && !entry.proc.killed) {
-    if (audioUrl && audioUrl !== entry.audioUrl) {
-      setMixerTrack(broadcastId, audioUrl);
+    const nextPath = extras.trackPath;
+    if (nextPath && nextPath !== entry.trackPath) {
+      setMixerTrack(broadcastId, extras);
     }
     return;
   }
-  startMixer(broadcastId, { mountPath, audioUrl });
+  startMixer(broadcastId, extras);
 }
 
 export function hasLiveMixer(broadcastId) {
@@ -277,6 +314,7 @@ export function attachLiveMp3Listener(broadcastId, req, res) {
     startMixer(id, {
       mountPath: entry?.mountPath,
       audioUrl: entry?.audioUrl,
+      trackPath: entry?.trackPath,
     });
     entry = mixers.get(id);
   }
@@ -286,8 +324,12 @@ export function attachLiveMp3Listener(broadcastId, req, res) {
   res.setHeader("Content-Type", "audio/mpeg");
   res.setHeader("Cache-Control", "no-cache, no-store");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("Accept-Ranges", "none");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.setHeader("X-Content-Type-Options", "nosniff");
+  if (typeof res.flushHeaders === "function") {
+    res.flushHeaders();
+  }
   if (req.method === "HEAD") {
     res.end();
     return true;

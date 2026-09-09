@@ -18,12 +18,13 @@ import {
   isMixerConfigured,
   setMixerMic,
   setMixerTrack,
-  startMixer,
   stopMixer,
   writeMixerPcm,
   attachLiveMp3Listener,
   hasFfmpeg,
   ensureMixer,
+  writeMixerTrackFile,
+  mixerTrackPath,
 } from "../services/broadcastMixer.js";
 import { resolveListenUrl } from "../services/broadcastListenUrl.js";
 import { sendAudioFile } from "../services/sendAudioFile.js";
@@ -219,7 +220,6 @@ router.post("/", authenticateToken, async (req, res) => {
       return { existing: false, row: await fetchBroadcast(client, id) };
     });
 
-    startMixer(payload.row.id, { mountPath: payload.row.mount_path });
     const broadcast = mapBroadcast(payload.row);
     return res.status(payload.existing ? 200 : 201).json({
       message: payload.existing
@@ -497,7 +497,21 @@ async function updateLiveBroadcast(req) {
   }
 
   if (result.hasTrack) {
-    setMixerTrack(broadcastId, result.audioUrl || null);
+    const fileId = audioFileId(result.broadcast);
+    if (fileId) {
+      const file = await withClient(async (client) => {
+        const row = await client.query(
+          `SELECT file_data FROM audio_files WHERE id = $1`,
+          [fileId]
+        );
+        return row.rows[0] || null;
+      });
+      if (file?.file_data) {
+        setMixerTrack(broadcastId, {
+          trackPath: writeMixerTrackFile(broadcastId, file.file_data),
+        });
+      }
+    }
     const mapped = mapBroadcast(result.broadcast);
     broadcastEvent(broadcastId, {
       type: "track_changed",
@@ -576,6 +590,17 @@ function audioFileId(row) {
   return Number.isFinite(fromTrack) && fromTrack > 0 ? fromTrack : null;
 }
 
+async function loadTrackAudio(fileId) {
+  if (!fileId) return null;
+  return withClient(async (client) => {
+    const result = await client.query(
+      `SELECT file_data, mime_type FROM audio_files WHERE id = $1`,
+      [fileId]
+    );
+    return result.rows[0] || null;
+  });
+}
+
 async function streamBroadcastListen(req, res) {
   try {
     const broadcastId = Number(req.params.id);
@@ -584,30 +609,27 @@ async function streamBroadcastListen(req, res) {
       return res.status(410).json({ message: "Broadcast is not live" });
     }
 
-    const audioUrl = mediaUrl(row.current_track_audio, "TRACK_BASEPATH");
-    if (hasFfmpeg()) {
+    const fileId = audioFileId(row);
+    const file = await loadTrackAudio(fileId);
+    const micLive = Boolean(getMicOn(broadcastId));
+
+    // Music-only must keep the Range/mp3 file path that iOS already plays.
+    // The live mixer is only for host commentary on top of that track.
+    if (micLive && hasFfmpeg()) {
+      if (file?.file_data) {
+        writeMixerTrackFile(broadcastId, file.file_data);
+      }
       ensureMixer(broadcastId, {
         mountPath: row.mount_path,
-        audioUrl,
+        trackPath: file?.file_data ? mixerTrackPath(broadcastId) : null,
       });
       if (attachLiveMp3Listener(broadcastId, req, res)) {
         return;
       }
     }
 
-    const fileId = audioFileId(row);
-    if (!fileId) {
-      return res.status(404).json({ message: "No track playing" });
-    }
-    const file = await withClient(async (client) => {
-      const result = await client.query(
-        `SELECT file_data, mime_type FROM audio_files WHERE id = $1`,
-        [fileId]
-      );
-      return result.rows[0] || null;
-    });
     if (!file?.file_data) {
-      return res.status(404).json({ message: "Track audio not found" });
+      return res.status(404).json({ message: fileId ? "Track audio not found" : "No track playing" });
     }
     const buffer = Buffer.isBuffer(file.file_data)
       ? file.file_data
